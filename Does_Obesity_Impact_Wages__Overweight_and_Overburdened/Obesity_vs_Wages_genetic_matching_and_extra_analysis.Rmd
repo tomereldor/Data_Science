@@ -1,0 +1,1184 @@
+---
+title: 'Weight Watching- Process, Code and Results'
+output:
+  word_document: default
+  html_notebook: default
+---
+
+
+
+# NEW EXTENTIONS
+
+#ESTIMATING THE TREATMENT EFFECTS USING GENETIC MATCHING
+
+## Loading Data and Packages
+
+### Replication: Environment and Data Prep
+```{r}
+####################################################
+## GOV 2001 REPLICATION PAPER: MATCHING ANALYSIS ###
+####################################################
+
+############################################
+### INSTALL AND CALL NECESSARY LIBRARIES ###
+############################################
+#install.packages("sandwich")
+#install.packages("foreign")
+#install.packages("stargazer")
+#install.packages("stats")
+#install.packages("lmtest")
+#install.packages("weights")
+#install.packages("cem")
+#install.packages("MatchIt")
+#install.packages("optmatch")
+#install.packages("plyr")
+
+library(sandwich)
+library(foreign)
+library(stargazer)
+library(stats)
+library(lmtest)
+library(weights)
+library(cem)
+library(MatchIt)
+library(optmatch)
+library(plyr)
+
+
+###################
+### IMPORT DATA ###
+###################
+setwd("~/Google Drive/Academics (Tomer)/0-2017 Buenos Aires Sem2.2/CS112 DataScience/R_CS112/Obesity_Wages")
+nlsy<-read.dta("maintmp.dta")
+
+########################
+### DATA PREPARATION ###
+########################
+#create list of control variables
+controls<-c("d_sexf","childany","childf","d_race_b","d_race_o","d_marrnever","d_marroth","age","age2","d_educ9_12",
+            "d_educ13_up","d_AFQT_0_25","d_AFQT_25_50","d_AFQT_50_75","d_AFQT_75_100",
+            "d_urban_res","d_tenure0_1","d_tenure1_3","d_tenure3_6","d_tenure6_up",
+            "d_emp0_9","d_emp10_24","d_emp25_49","d_emp50_999","d_emp1000_up",
+            "d_year1989","d_year1990","d_year1992","d_year1993","d_year1994","d_year1996","d_year1998",
+            "d_year2000","d_year2002","d_ind_ag","d_ind_for","d_ind_mining","d_ind_const","d_ind_mfrg",
+            "d_ind_transp","d_ind_wtrade","d_ind_rtrade","d_ind_finance","d_ind_bus_svc","d_ind_pers_svc",
+            "d_ind_entert","d_ind_prof_svc","d_ind_pub_ad","d_occ_mgmt","d_occ_tech","d_occ_admin","d_occ_svc",
+            "d_occ_farming","d_occ_prodxn","d_occ_operators","d_occ_military")
+
+#subset data to include only variables used in analyses
+varlist<-c("person_id","ln_smwage","CPS_hourly_rec","d_hinsEMP","d_hinsEMPOTH","d_hinsINDCOV","d_hinsPUBLIC","d_hinsNONE",
+           "d_hinsUNKNOWN","overwt","d_obese","d_obese1","d_obese2","d_overwt","overwtinsEMP",
+           "d_obese1insEMP","d_obese2insEMP","d_obesinsEMP", controls)
+nlsy<-nlsy[,c(varlist,"sample_wt","srvy_yr","birth_year","AFQTrevised",
+              "educ","tenure","BMI","NumberEmp")]
+```
+
+
+## Data Prep
+We wanted to understand what are the most correlated variables with both treatment and wage in order to:
+1. See what subset of data would be good to work with
+2. Understand which are the key covariates to match on and which are less relevant for matching, seeing that mathcing on 40 covariates doesn't yield good balance impromevent
+
+### How To Subset Data?
+#### See correlation of obesity with other factors: General Linear Model
+
+```{r}
+#before everything - producing a dictionary of actual titles for variables of interest
+
+titles <- as.vector(names(nlsy))
+titles_intrs  <- titles[c(3:4, 8, 11:14, 18, 19:26, 28:74,81)]
+# Label table
+var.mt <- c("Hourly wage*", "Employer coverage in own name", "Uninsured", "Obese (BMI>30)", 
+            "Mildly obese (BMI>30 and BMI<35)", "Morbidly obese (BMI>35)", "Overweight",
+            "Obese * employer coverage (own)", "Female", "Any children in household", 
+            "Female with children in household","Race - Black", "Race - Other", "Never married", 
+            "Formerly married","Age", "Education: 9-12", "Education: 13 and over", "AFQT: 0-25", 
+            "AFQT: 25-50", "AFQT: 50-75", "AFQT: 75-100", "Urban residence", "Job tenure: 0-1 years", 
+            "Job tenure: 1-3 years", "Job tenure: 3-6 years", "Job tenure: 6+ years","Employer size: 0-9",
+            "Employer size: 10-24","Employer size: 25-49", "Employer size: 50-999","Employer size: 1000+",
+            "Survey year: 1989", "Survey year: 1990", "Survey year: 1992", "Survey year: 1993",
+            "Survey year: 1994", "Survey year: 1996", "Survey year: 1998", "Survey year: 2000", 
+            "Survey year: 2002", "Industry: Agriculture", "Industry: Forestry", "Industry: Mining",
+            "Industry: Construction", "Industry: Manufacturing", "Industry: Transport", 
+            "Industry: Wholesale trade", "Industry: Retail trade", "Industry: Finance", 
+            "Industry: Business services", "Industry: Personal services", "Industry: Entertainment",
+            "Industry: Professional services", "Industry: Public administration", 
+            "Occupation: Management", "Occupation: Technical", "Occupation: Administrative", 
+            "Occupation: Service", "Occupation: Farming", "Occupation: Production", 
+            "Occupation: Operators", "Occupation: Military", "BMI")
+
+
+dic <- cbind(titles_intrs,var.mt)
+dic
+```
+
+
+```{r}
+
+#Method 1 to see correlation of obesity with other factors: General Linear Model
+glm  <- glm(formula = d_obese ~ d_sexf+childany+childf+age+d_urban_res+
+              srvy_yr+AFQTrevised+educ+tenure+NumberEmp+
+              d_race_b+d_race_o+d_marrnever+d_marroth+
+              d_ind_ag+d_ind_for+d_ind_mining+d_ind_const+d_ind_mfrg+
+              d_ind_transp+d_ind_wtrade+d_ind_rtrade+d_ind_finance+
+              d_ind_bus_svc+d_ind_pers_svc+d_ind_entert+d_ind_prof_svc+
+              d_occ_mgmt+d_occ_tech+d_occ_admin+d_occ_svc+
+              d_occ_farming+d_occ_prodxn+d_occ_operators , family=binomial, data=nlsy)
+summary(glm)
+
+
+```
+
+
+
+```{r}
+#Method 1 to see correlation of obesity with other factors: General Linear Model
+#we will use this for propensity scores too
+glm.obese  <- glm(formula = d_obese ~ d_sexf+childany+childf+age+d_urban_res+
+              srvy_yr+AFQTrevised+educ+tenure+NumberEmp+
+              d_race_b+d_race_o+d_marrnever+d_marroth+
+              d_ind_ag+d_ind_for+d_ind_mining+d_ind_const+d_ind_mfrg+
+              d_ind_transp+d_ind_wtrade+d_ind_rtrade+d_ind_finance+
+              d_ind_bus_svc+d_ind_pers_svc+d_ind_entert+ #d_ind_prof_sv+
+              d_occ_mgmt+d_occ_tech+d_occ_admin+d_occ_svc+
+              d_occ_farming+d_occ_prodxn+d_occ_operators , family=binomial, data=nlsy)
+
+summary(glm.obese)
+
+```
+
+
+Regression on Wages - which factors are most correlated with (low) wages
+```{r}
+attach(nlsy)
+lm.wage  <- lm(formula = (nlsy$CPS_hourly_rec)  ~ d_sexf+childany+childf+age+d_urban_res+
+              srvy_yr+AFQTrevised+educ+tenure+NumberEmp+
+              d_race_b+d_race_o+d_marrnever+d_marroth+
+              d_ind_ag+d_ind_for+d_ind_mining+d_ind_const+d_ind_mfrg+
+              d_ind_transp+d_ind_wtrade+d_ind_rtrade+d_ind_finance+
+              d_ind_bus_svc+d_ind_pers_svc+d_ind_entert+ #d_ind_prof_sv+
+              d_occ_mgmt+d_occ_tech+d_occ_admin+d_occ_svc+
+              d_occ_farming+d_occ_prodxn+d_occ_operators , family=binomial, data=nlsy)
+
+summary(lm.wage)
+#as.list(sort(abs(coef(lm.wage))))
+
+```
+
+The factors most correlated with low wages will be the ones with the most negative weight of the coefficient, under the "Estimate" column.
+
+
+
+
+### Generating Propensity Scores for using in Matching
+```{r}
+#we use our previously general linear fit model to extract the propensity scores
+propensities <- glm$fitted.values
+nlsy <- cbind(nlsy,propensities)
+
+```
+
+
+
+## Subsetting the data
+According to our prevoious models, we saw that amongst the highest correlated variabels with obesity and lower wage, some variables are highly relevant to our decision problem at hand, since they also are correlated with discrimination of wages and lower socioeconomic status:
+1. Being Female
+2. Not Being White: We see high and roughhly equal correlation with *both* race categories "Black" and *"Other"* (=other than white or black).
+According to the previous regressions, both black and "other" races are correlated with BOTH lower wages and obesity. Therefore, these groups are at more economical (and therefore, health) risk. 
+
+
+```{r}
+#we want to only analyze people with employee insurance
+women <- nlsy[nlsy$d_sexf == 1 & nlsy$d_hinsEMP==1,] 
+black_women <- women[women$d_race_b == 1,]
+other_women <- women[women$d_race_o == 1,]
+nonwhite_women <- rbind(black_women,other_women)
+
+```
+
+
+
+### NonWhite Women: Genetic Matching
+We want to improve the matching by:
+1. Focusing on only the population of interest: nonwhite women; so we can match more precisely for a more feasible sample size.
+2. Choosing KEY covariates to match on.
+3. Incorporating Propensity Scores
+4. Performing GENETIC MATCHING.
+5. Check covariate balance improvements
+6. Estimate the treatment effect for the treated, after having more balanced groups.
+
+1) population of interest: nonwhite women.
+2) Choosing Key Covariates:
+    We'll drop covarites that seem to not be relevant to our decision problem and don't correlate with being obese or lower wages.
+    We would have dropped some variables which seemed to have no relation, but if we want to be more rigorous.
+    Going from the bottom according to the beta tables, it would be:
+    d_occ_operators (occupation: operators),tenure, NumberEmp (number of employers in company), AFQTrevised (scores in AFQT test, revised), d_ind_wtrade (working in trade industry)
+    They are also found irrelevant to the treatment or the outcome, and irrelevant to our research question or decision question. 
+3) We fit propensity scores using generalized linear model. We add it as a column (another variable) to the dataset, and later use it as one of the covariates to match on and to achieve balance on.
+4) We Perform genetic matching to find optimal weights for achieving optimal balance. 
+5) Later, we we'll check the covariate balance before and after matching.
+6) Assuming that now the control and treatment groups are balanced, we can estimate the treatment effect for the treated.
+
+
+```{r}
+
+library(Matching)
+library(MASS)
+library(rgenoud)
+
+#1 - population of interest = NonWhite Women
+nrow(nonwhite_women)
+
+
+#The covariates we want to match on and obtain balance on
+# - key covariates = we want to match more closely on key important covariates which also might affect wages, and weigh less covaraites which are least correlated with both treatment obesity low wages. 
+#We already removed covariates which are obviously affected by the treatment, like BMI and Obesity level; but there are other covariates which might be affected BY obesity as well and therefore should be removed to not induce bias.
+#The most obvious one is Marriage (current or ever). 
+#The next correlated but less direct one is having children, currently or ever. We also see that it is directly correlated with obeisty from the first regression we used to find the correlation of obesity with other covariates; chilren was correlated. Luckily, it is also already relatively balanced in the pre-data (p-value for all children related terms was 0.3, versus other p-values which were mostly a tenth of that or smaller), so it is less likely that this covariate will become wildly unbalanced.
+#so we remove: nonwhite_women$d_marroth, nonwhite_women$d_marrnever, nonwhite_women$childf (#interaction term of child+female), nonwhite_women$childany
+# Also, we will drop a few other covariates that are irrelvent to our study, which were found the LEAST correlated with both being obese and with wage distribution, and in part might be impacted by obesity, are the following:
+# AFQTrevised, d_ind_wtrade, d_occ_operators,tenure, NumberEmp
+
+
+# Check Covariate Balance before matching:
+#balance_0_pre <- MatchBalance(nonwhite_women$d_obese ~ nonwhite_women$propensities + nonwhite_women$d_sexf + nonwhite_women$childany + nonwhite_women$childf + nonwhite_women$age + nonwhite_women$d_urban_res + nonwhite_women$srvy_yr + nonwhite_women$educ + nonwhite_women$d_race_b + nonwhite_women$d_race_o + nonwhite_women$d_marrnever + nonwhite_women$d_marroth + nonwhite_women$d_ind_ag + nonwhite_women$d_ind_for + nonwhite_women$d_ind_mining + nonwhite_women$d_ind_const + nonwhite_women$d_ind_mfrg+ d_ind_transp + nonwhite_women$d_ind_rtrade + nonwhite_women$d_ind_finance + nonwhite_women$d_ind_bus_svc + nonwhite_women$d_ind_pers_svc + nonwhite_women$d_ind_entert + nonwhite_women$d_ind_prof_svc + nonwhite_women$d_occ_mgmt + nonwhite_women$d_occ_tech + nonwhite_women$d_occ_admin + nonwhite_women$d_occ_svc + nonwhite_women$d_occ_farming + nonwhite_women$d_occ_prodxn , nboots=500)
+
+
+```
+
+
+```{r}
+#Let's call GenMatch() to find the optimal weight to give each
+#covariate in 'X' so as we have achieved balance on the covariates in #'BalanceMat'
+
+matchingvariables = cbind(nonwhite_women$propensities, nonwhite_women$d_sexf, nonwhite_women$age, nonwhite_women$d_urban_res, nonwhite_women$srvy_yr, nonwhite_women$educ, nonwhite_women$d_race_b, nonwhite_women$d_race_o, nonwhite_women$d_ind_ag, nonwhite_women$d_ind_for, nonwhite_women$d_ind_mining, nonwhite_women$d_ind_const, nonwhite_women$d_ind_mfrg, nonwhite_women$d_ind_transp, nonwhite_women$d_ind_rtrade, nonwhite_women$d_ind_finance, nonwhite_women$d_ind_bus_svc, nonwhite_women$d_ind_pers_svc, nonwhite_women$d_ind_entert, nonwhite_women$d_ind_prof_svc, nonwhite_women$d_occ_mgmt, nonwhite_women$d_occ_tech, nonwhite_women$d_occ_admin, nonwhite_women$d_occ_svc, nonwhite_women$d_occ_farming, nonwhite_women$d_occ_prodxn)
+
+
+genout.nonwhite <- GenMatch(Tr=nonwhite_women$d_obese, X=matchingvariables, estimand="ATT", pop.size=100, max.generations=50, replace =TRUE, wait.generations=4) 
+length((nonwhite_women$d_obese))
+length((matchingvariables))
+
+# Now that GenMatch() has found the optimal weights, let's actually match using those weights (using Weight.matrix=genout)
+mout.nonwhite <- Match(Y=nonwhite_women$CPS_hourly_rec, Tr=nonwhite_women$d_obese, X=matchingvariables, estimand="ATT", M=1, replace = TRUE, Weight.matrix=genout.nonwhite) 
+summary(mout.nonwhite )
+
+
+```
+
+Several caliper choices actually reduced the balance vs no-caliper, so we continued with no caliper.
+                       
+##### examining post - genetic matching balance
+```{r}
+#Let's determine if balance has actually been obtained on the variables of interest
+
+balance_1_post <- MatchBalance(nonwhite_women$d_obese ~ nonwhite_women$propensities + nonwhite_women$d_sexf + nonwhite_women$childany + nonwhite_women$childf + nonwhite_women$age + nonwhite_women$d_urban_res + nonwhite_women$srvy_yr + nonwhite_women$educ + nonwhite_women$d_race_b + nonwhite_women$d_race_o + nonwhite_women$d_marrnever + nonwhite_women$d_marroth + nonwhite_women$d_ind_ag + nonwhite_women$d_ind_for + nonwhite_women$d_ind_mining + nonwhite_women$d_ind_const + nonwhite_women$d_ind_mfrg + nonwhite_women$d_ind_transp + nonwhite_women$d_ind_rtrade + nonwhite_women$d_ind_finance + nonwhite_women$d_ind_bus_svc + nonwhite_women$d_ind_pers_svc + nonwhite_women$d_ind_entert + nonwhite_women$d_ind_prof_svc + nonwhite_women$d_occ_mgmt + nonwhite_women$d_occ_tech + nonwhite_women$d_occ_admin + nonwhite_women$d_occ_svc + nonwhite_women$d_occ_farming + nonwhite_women$d_occ_prodxn, match.out=mout.nonwhite, nboots=500)
+
+```
+
+
+##### Estimating the Impact of Obesity on wages for nonwhite women, after Genetic Matching
+```{r}
+mout.nonwhite$est
+
+# 95% confidence intervals
+mout.nonwhite$se #standard error
+1.96*(mout.nonwhite$se)  #error*T-value corresponding to 95% condience interval
+mout.nonwhite$est - 1.96*(mout.nonwhite$se)  
+mout.nonwhite$est + 1.96*(mout.nonwhite$se)
+
+```
+
+The estimated effet is -0.45, meaning a reduction of 45 cents per hour, but it is NOT significant, since a 95% confidence interval shows the true effect might be either negative or positive: we are 95% confident that the true effect is between \$-1.29 (decrease) to a \$0.37 increase.
+
+
+###### Sensitivity Analysis
+```{r}
+#install.packages(rbounds)
+library(rbounds)
+#sensitivity analysis
+psens(mout.nonwhite , Gamma=1.5, GammaInc=.1)
+
+```
+
+From Luke Keele's paper (2010) release on rbounds Package for sensitibity analysis with matched data (from http://www.personal.psu.edu/ljk20/rbounds%20vignette.pdf)
+"The function psens provides Rosenbaum???s bounds for the p-values from Wilcoxon???s signed
+rank test. When Ro = 1, we see the p-value is quite close to that estimated in the matching
+analysis. The proper interpretation of this p-value is that it holds assuming there is no
+hidden bias due to an unobserved confounder".
+
+He continues explaining that if a small increase in Gamma renders the resulted effect insignificant, it means that "even a small *unobserved difference in a covariate* would change our inference." 
+
+
+
+## White Women: Estimating the Impact of Obesity on Wage for White Women
+The article noted that the penalization of obeisty on wage seemed the largest (and the only significant one) for white women. We will examine that now using the same methods as before.
+
+
+### White Women: Genetic Matching
+We aim to improve matching by the same process as before.
+1. Focusing on only the population of interest: white women.
+2. Choosing KEY covariates to match on.
+3. Incorporating Propensity Scores
+4. Performing GENETIC MATCHING.
+5. Check covariate balance improvements
+6. Estimate the treatment effect for the treated, after having more balanced groups.
+
+
+
+```{r}
+
+#1 - population of interest = White Women
+#add indicator for white respondent back to data:
+#nlsy data
+nlsy$d_race_w=0
+nlsy[nlsy$d_race_b==0 & nlsy$d_race_o==0,]$d_race_w=1
+
+#create white women data
+white_women <- nlsy[nlsy$d_race_w==1 & nlsy$d_sexf==1 & nlsy$d_hinsEMP==1,]
+
+#check how many observations do we have:
+nrow(white_women)
+
+#The covariates we want to match on and obtain balance on
+attach(white_women)
+matchingvariables.white = cbind(white_women$propensities, white_women$d_sexf, white_women$age, white_women$d_urban_res, white_women$srvy_yr, white_women$educ,  white_women$d_ind_ag, white_women$d_ind_for, white_women$d_ind_mining, white_women$d_ind_const, white_women$d_ind_mfrg,white_women$d_ind_transp, white_women$d_ind_rtrade, white_women$d_ind_finance, white_women$d_ind_bus_svc, white_women$d_ind_pers_svc, white_women$d_ind_entert, white_women$d_ind_prof_svc, white_women$d_occ_mgmt, white_women$d_occ_tech, white_women$d_occ_admin, white_women$d_occ_svc, white_women$d_occ_farming, white_women$d_occ_prodxn)
+
+
+#3. Check Covariate Balance before matching:
+white.women.balance.pre <- MatchBalance(d_obese ~ white_women$propensities + white_women$d_sexf + white_women$childany + white_women$childf + white_women$age + white_women$d_urban_res + white_women$srvy_yr + white_women$educ + white_women$d_marrnever + white_women$d_marroth + white_women$d_ind_ag + white_women$d_ind_for + white_women$d_ind_mining + white_women$d_ind_const + white_women$d_ind_mfrg + white_women$d_ind_transp + white_women$d_ind_rtrade + white_women$d_ind_finance + white_women$d_ind_bus_svc + white_women$d_ind_pers_svc + white_women$d_ind_entert + white_women$d_ind_prof_svc + white_women$d_occ_mgmt + white_women$d_occ_tech + white_women$d_occ_admin + white_women$d_occ_svc + white_women$d_occ_farming + white_women$d_occ_prodxn , nboots=500)
+
+#covariates are not very balanced. we will perform genetic matching.
+
+#2 - key covariates = we don't match on covaraites which are least correlated with both treatment obesity low wages. We know that from the initial table. thes covariates would be:
+# d_occ_operators,tenure, NumberEmp, AFQTrevised, d_ind_wtrade
+
+#Let's call GenMatch() to find the optimal weight to give each
+#covariate in 'X' so as we have achieved balance on the covariates in #'BalanceMat'
+genout.white.women <- GenMatch(Tr=d_obese, X=matchingvariables.white, estimand="ATT", pop.size=100, max.generations=50, replace =TRUE, wait.generations=4, caliper=0.2) #trying optimizing caliper
+
+# Now that GenMatch() has found the optimal weights, let's actually match using those weights (using Weight.matrix=genout)
+mout.white.women <- Match(Y=white_women$CPS_hourly_rec, Tr=d_obese, X=matchingvariables.white, estimand="ATT", M=1, replace = TRUE, Weight.matrix=genout.white.women, caliper=0.2 ) #trying optimizing caliper
+summary(mout.white.women)
+
+### examining post - genetic matching balance
+
+#Let's determine if balance has actually been obtained on the variables of interest
+
+white.women.balance.post <- MatchBalance(white_women$d_obese ~ white_women$propensities + white_women$d_sexf + white_women$childany + white_women$childf + white_women$age + white_women$d_urban_res + white_women$srvy_yr + white_women$educ + white_women$d_race_b + white_women$d_race_o + white_women$d_marrnever + white_women$d_marroth + white_women$d_ind_ag + white_women$d_ind_for + white_women$d_ind_mining + white_women$d_ind_const + white_women$d_ind_mfrg + white_women$d_ind_transp + white_women$d_ind_rtrade + white_women$d_ind_finance + white_women$d_ind_bus_svc + white_women$d_ind_pers_svc + white_women$d_ind_entert + white_women$d_ind_prof_svc + white_women$d_occ_mgmt + white_women$d_occ_tech + white_women$d_occ_admin + white_women$d_occ_svc + white_women$d_occ_farming + white_women$d_occ_prodxn, match.out=mout.white.women, nboots=500)
+                               
+summary(white.women.balance.post)
+
+```
+
+Matching Results:
+
+Before Matching Minimum p.value: < 2.22e-16 
+Variable Name(s): propensities age srvy_yr educ  Number(s): 1 5 7 8 
+
+After Matching Minimum p.value: 0.058119 
+Variable Name(s): white_women$d_marroth  Number(s): 12 
+
+Furthermore, most p-values are 1, meaning exact matching, and only 2 are below 0.1. 
+
+
+```{r}
+summary(mout.white.women)
+summary(white.women.balance.post)
+white.women.balance.post$BMsmallest.p.value
+white.women.balance.post$BMsmallestVarName
+white.women.balance.post$AMsmallest.p.value
+white.women.balance.post$AMsmallestVarName
+
+##Estimating the Impact of Obesity on wages for white women, after Genetic Matching
+white.women.est <- mout.white.women$est
+
+# 95% confidence intervals
+white.women.conf1 <- white.women.est - 1.96*(mout.white.women$se) 
+white.women.conf2 <- white.women.est + 1.96*(mout.white.women$se)
+print("Confidence Interval")
+white.women.conf1[1] ;  white.women.conf2[1]
+```
+
+This is the estimated effet and confidence interval of obesity on wage for white women, in dollars per hour:
+
+Estimate...  0.55126 
+AI SE......  0.3644 
+T-stat.....  1.5128 
+p.val......  0.13034 
+
+Original number of observations..............  6411 
+Original number of treated obs...............  1019 
+Matched number of observations...............  183 
+Matched number of observations  (unweighted).  183 
+
+Caliper (SDs)........................................   0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2 
+Number of obs dropped by 'exact' or 'caliper'  836 
+
+                    Length Class  Mode     
+BeforeMatching      30     -none- list     
+AfterMatching       30     -none- list     
+BMsmallest.p.value   1     -none- numeric  
+BMsmallestVarName    4     -none- character
+BMsmallestVarNumber  4     -none- numeric  
+AMsmallest.p.value   1     -none- numeric  
+AMsmallestVarName    2     -none- character
+AMsmallestVarNumber  2     -none- numeric  
+[1] 0
+[1] propensities" "white_women$age"         
+[3] srvy_yr"      "white_women$educ"        
+[1] 0.07598652
+[1] childany  "childf"  
+[1] "Confidence Interval"
+[1] -0.1629731
+[1] 1.265487
+
+####Sensitivity Analysis
+```{r}
+#install.packages(rbounds)
+library(rbounds)
+#sensitivity analysis
+psens(mout.white.women , Gamma=1.5, GammaInc=.1)
+
+#The function psens provides Rosenbaum???s bounds for the p-values from Wilcoxon???s signed
+#rank test. When ?? = 1, we see the p-value is quite close to that estimated in the matching
+#analysis. The proper interpretation of this p-value is that it holds assuming there is no
+#hidden bias due to an unobserved confounder.
+psens(mout.white.women , Gamma=1.5, GammaInc=.1)
+hlsens(mout.white.women , Gamma=1.5, GammaInc=.1)
+```
+
+The result is not sensitive to hidden variables, up to Gamma of 1.5
+
+
+
+## Black Men Replication: Estimating the Impact of Obesity on Wage for Black Men
+The article estimated the impact of obesity on wage for black men only by simple regression, for the *unmatched* dataset. In fact, all their final estimations in the tables were based on simple regressions without matching. 
+In the code replication section, you could see that by inspecting "modelwmale" and seeing that it is a simple linear model ($lm()$) on the original unmatched dataset: "nlsy" instead of "data.mahal".
+They estimated the impact to be the most significant for black men, reaching 11%, as a percent of wages.
+But this is potentially confounded by covariate imbalance!
+We will use genetic matching to estimate the effect more rigorously.
+
+*In the first section, we estimated the effect for "nonwhite" women, not "black" women alone. We included also the "other" race since it was correlated with lower income closely to black, but there were very few of them so it didn't make sense to conduct a seperate matching and analysis for them, but it actually makes more sense to divide the data like that, instead of excluding them completely from the analysis such as the previous paper did. 
+However, here, we want to directly compare the outcomes from the previous paper of 11% penalization in wage to what we can get after proper matching.
+
+#### Black Men: Genetic Matching
+
+```{r}
+
+#1 - population of interest = Black Men
+#add indicator for white respondent back to data:
+#nlsy data
+
+#create black men data
+black.men <- nlsy[nlsy$d_race_b==1 & nlsy$d_sexf==0 & nlsy$d_hinsEMP==1,]
+
+#check how many observations do we have:
+nrow(black.men)
+
+#The covariates we want to match on and obtain balance on
+attach(black.men)
+matchingvariables.white = cbind(black.men$propensities, black.men$d_sexf, black.men$age, black.men$d_urban_res, black.men$srvy_yr, black.men$educ,  black.men$d_ind_ag, black.men$d_ind_for, black.men$d_ind_mining, black.men$d_ind_const, black.men$d_ind_mfrg,black.men$d_ind_transp, black.men$d_ind_rtrade, black.men$d_ind_finance, black.men$d_ind_bus_svc, black.men$d_ind_pers_svc, black.men$d_ind_entert, black.men$d_ind_prof_svc, black.men$d_occ_mgmt, black.men$d_occ_tech, black.men$d_occ_admin, black.men$d_occ_svc, black.men$d_occ_farming, black.men$d_occ_prodxn)
+
+
+#3. Check Covariate Balance before matching:
+black.men.balance.pre <- MatchBalance(d_obese ~ black.men$propensities + black.men$d_sexf + black.men$childany + black.men$childf + black.men$age + black.men$d_urban_res + black.men$srvy_yr + black.men$educ + black.men$d_marrnever + black.men$d_marroth + black.men$d_ind_ag + black.men$d_ind_for + black.men$d_ind_mining + black.men$d_ind_const + black.men$d_ind_mfrg + black.men$d_ind_transp + black.men$d_ind_rtrade + black.men$d_ind_finance + black.men$d_ind_bus_svc + black.men$d_ind_pers_svc + black.men$d_ind_entert + black.men$d_ind_prof_svc + black.men$d_occ_mgmt + black.men$d_occ_tech + black.men$d_occ_admin + black.men$d_occ_svc + black.men$d_occ_farming + black.men$d_occ_prodxn , nboots=500)
+
+#covariates are not very balanced. we will perform genetic matching.
+
+#2 - key covariates = we don't match on covaraites which are least correlated with both treatment obesity low wages. We know that from the initial table. thes covariates would be:
+# d_occ_operators,tenure, NumberEmp, AFQTrevised, d_ind_wtrade
+
+#Let's call GenMatch() to find the optimal weight to give each
+#covariate in 'X' so as we have achieved balance on the covariates in #'BalanceMat'
+genout.black.men <- GenMatch(Tr=d_obese, X=matchingvariables.white, estimand="ATT", pop.size=100, max.generations=50, replace =TRUE, wait.generations=4, caliper=0.5) #trying optimizing caliper
+
+# Now that GenMatch() has found the optimal weights, let's actually match using those weights (using Weight.matrix=genout)
+mout.black.men <- Match(Y=black.men$CPS_hourly_rec, Tr=d_obese, X=matchingvariables.white, estimand="ATT", M=1, replace = TRUE, Weight.matrix=genout.black.men, caliper=0.5 ) #trying optimizing caliper
+summary(mout.black.men)
+
+### examining post - genetic matching balance
+
+#Let's determine if balance has actually been obtained on the variables of interest
+
+black.men.balance.post <- MatchBalance(black.men$d_obese ~ black.men$propensities + black.men$d_sexf + black.men$childany + black.men$childf + black.men$age + black.men$d_urban_res + black.men$srvy_yr + black.men$educ + black.men$d_race_b + black.men$d_race_o + black.men$d_marrnever + black.men$d_marroth + black.men$d_ind_ag + black.men$d_ind_for + black.men$d_ind_mining + black.men$d_ind_const + black.men$d_ind_mfrg + black.men$d_ind_transp + black.men$d_ind_rtrade + black.men$d_ind_finance + black.men$d_ind_bus_svc + black.men$d_ind_pers_svc + black.men$d_ind_entert + black.men$d_ind_prof_svc + black.men$d_occ_mgmt + black.men$d_occ_tech + black.men$d_occ_admin + black.men$d_occ_svc + black.men$d_occ_farming + black.men$d_occ_prodxn, match.out=mout.black.men, nboots=500)
+                               
+summary(black.men.balance.post)
+
+```
+
+Matching Reslts
+Before Matching Minimum p.value: < 2.22e-16 
+Variable Name(s): propensities childany age srvy_yr educ  Number(s): 1 3 5 7 8 
+
+After Matching Minimum p.value: 0.0024569 
+Variable Name(s): black.men$childany  Number(s): 3 
+
+
+
+```{r}
+
+
+black.men.balance.post$BMsmallest.p.value
+black.men.balance.post$AMsmallest.p.value
+summary(mout.black.men)
+##Estimating the Impact of Obesity on wages for white women, after Genetic Matching
+black.men.est <- mout.black.men$est
+black.men.est
+
+# 95% confidence intervals
+mout.black.men$se #standard error
+1.96*(mout.black.men$se) #error*T-value corresponding to 95% condience interval
+black.men.conf1 <- black.men.est - 1.96*(mout.black.men$se) 
+black.men.conf2 <- black.men.est + 1.96*(mout.black.men$se)
+print("Confidence Intervals")
+black.men.conf1 ;  black.men.conf2
+```
+
+This is the estimated effet and confidence interval of obesity on wage.
+
+Estimate...  -0.13818 
+AI SE......  0.35283 
+T-stat.....  -0.39164 
+p.val......  0.69532 
+
+Confidence Interval:
+ -0.8297308 , 0.5533645
+
+####Sensitivity Analysis
+```{r}
+#sensitivity analysis
+psens(mout.black.men , Gamma=1.5, GammaInc=.1)
+```
+The result is sensitive to hidden bias.
+
+## Last but certainly not least: White Men - Impact of Obesity on Wages
+To finish more rigiours matching for replicating the study, we will estimate the impact for the last remaining group. 
+#### White Men: Genetic Matching
+
+```{r}
+
+#1 - population of interest = White Men
+#add indicator for white respondent back to data
+nlsy$d_race_w=0
+nlsy[nlsy$d_race_b==0 & nlsy$d_race_o==0,]$d_race_w=1 
+
+#create white men data
+white.men <- nlsy[nlsy$d_race_w==1 & nlsy$d_sexf==0 & nlsy$d_hinsEMP==1,]
+
+#check how many observations do we have:
+nrow(white.men)
+
+
+#The covariates we want to match on and obtain balance on
+attach(white.men)
+matchingvariables.whitemen = cbind(white.men$propensities, white.men$d_sexf, white.men$age, white.men$d_urban_res, white.men$srvy_yr, white.men$educ,  white.men$d_ind_ag, white.men$d_ind_for, white.men$d_ind_mining, white.men$d_ind_const, white.men$d_ind_mfrg,white.men$d_ind_transp, white.men$d_ind_rtrade, white.men$d_ind_finance, white.men$d_ind_bus_svc, white.men$d_ind_pers_svc, white.men$d_ind_entert, white.men$d_ind_prof_svc, white.men$d_occ_mgmt, white.men$d_occ_tech, white.men$d_occ_admin, white.men$d_occ_svc, white.men$d_occ_farming, white.men$d_occ_prodxn)
+
+
+#3. Check Covariate Balance before matching:
+white.men.balance.pre <- MatchBalance(white.men$d_obese ~ white.men$propensities + white.men$d_sexf + white.men$childany + white.men$childf + white.men$age + white.men$d_urban_res + white.men$srvy_yr + white.men$educ + white.men$d_marrnever + white.men$d_marroth + white.men$d_ind_ag + white.men$d_ind_for + white.men$d_ind_mining + white.men$d_ind_const + white.men$d_ind_mfrg +white.men$d_ind_transp + white.men$d_ind_rtrade + white.men$d_ind_finance + white.men$d_ind_bus_svc + white.men$d_ind_pers_svc + white.men$d_ind_entert + white.men$d_ind_prof_svc + white.men$d_occ_mgmt + white.men$d_occ_tech + white.men$d_occ_admin + white.men$d_occ_svc + white.men$d_occ_farming + white.men$d_occ_prodxn , nboots=500)
+
+#covariates are not very balanced. we will perform genetic matching.
+
+#2 - key covariates = we don't match on covaraites which are least correlated with both treatment obesity low wages. We know that from the initial table. thes covariates would be:
+# d_occ_operators,tenure, NumberEmp, AFQTrevised, d_ind_wtrade
+
+#Let's call GenMatch() to find the optimal weight to give each
+#covariate in 'X' so as we have achieved balance on the covariates in #'BalanceMat'
+genout.white.men <- GenMatch(Tr=white.men$
+                               d_obese, X=matchingvariables.whitemen, estimand="ATT", pop.size=100, max.generations=50, replace =TRUE, wait.generations=4, caliper=0.2) #because there are 14,000 white men in the data, we can allow very small caliper, almost exact mathing
+
+# Now that GenMatch() has found the optimal weights, let's actually match using those weights (using Weight.matrix=genout)
+mout.white.men <- Match(Y=white.men$CPS_hourly_rec, Tr=white.men$d_obese, X=matchingvariables.whitemen, estimand="ATT", M=1, replace = TRUE, Weight.matrix=genout.white.men, caliper=0.2 ) #because there are 14,000 white men in the data, we can allow very small caliper, almost exact mathing
+summary(mout.white.men)
+
+### examining post - genetic matching balance
+
+#Let's determine if balance has actually been obtained on the variables of interest
+
+white.men.balance.post <- MatchBalance(white.men$d_obese ~ white.men$propensities + white.men$d_sexf + white.men$childany + white.men$childf + white.men$age + white.men$d_urban_res + white.men$srvy_yr + white.men$educ + white.men$d_race_b + white.men$d_race_o + white.men$d_marrnever + white.men$d_marroth + white.men$d_ind_ag + white.men$d_ind_for + white.men$d_ind_mining + white.men$d_ind_const + white.men$d_ind_mfrg + white.men$d_ind_transp + white.men$d_ind_rtrade + white.men$d_ind_finance + white.men$d_ind_bus_svc + white.men$d_ind_pers_svc + white.men$d_ind_entert + white.men$d_ind_prof_svc + white.men$d_occ_mgmt + white.men$d_occ_tech + white.men$d_occ_admin + white.men$d_occ_svc + white.men$d_occ_farming + white.men$d_occ_prodxn, match.out=mout.white.men, nboots=500)
+                               
+
+
+```
+
+###Etimating the effect
+```{r}
+summary(mout.white.men)
+white.men.balance.post$BMsmallest.p.value
+white.men.balance.post$BMsmallestVarName
+white.men.balance.post$AMsmallest.p.value
+white.men.balance.post$AMsmallestVarName
+##Estimating the Impact of Obesity on wages for white women, after Genetic Matching
+white.men.est <- mout.white.men$est
+white.men.est
+
+# 95% confidence intervals
+mout.white.men$se #standard error
+1.96*(mout.white.men$se) #error*T-value corresponding to 95% condience interval
+white.men.conf1 <- white.men.est - 1.96*(mout.white.men$se) 
+white.men.conf2 <- white.men.est + 1.96*(mout.white.men$se)
+print("Conf Int")
+white.men.conf1[1] ;  white.men.conf2[1]
+```
+
+
+##### Estimated effect of obesity on wage for white men, in dollars per hour:
+
+Estimate...  0.0017877 
+AI SE......  0.24067 
+T-stat.....  0.0074281 
+p.val......  0.99407 
+
+Original number of observations..............  13189 
+Original number of treated obs...............  2505 
+Matched number of observations...............  702 
+Matched number of observations  (unweighted).  709 
+
+Caliper (SDs)........................................   0.2 
+Number of obs dropped by 'exact' or 'caliper'  1803 
+
+
+Estimate...  0.0017877 
+AI SE......  0.24067 
+Confidence Interval:
+ -0.4699329
+ 0.4735084
+
+There is completely no effect of obesity on wage for white men, in dollars per hour:
+
+####Sensitivity Analysis
+```{r}
+#sensitivity analysis
+hlsens(mout.white.men , Gamma=1.5, GammaInc=.1)
+```
+
+Unconfounded estimate ....  0.2203 
+It is slightly sensative to hidden bias, but not by enough to make it a statistically meaningful effect soon.
+
+
+
+
+
+
+# EXTENTION: Is The Impact related to Insurance? Insured vs. Uninsured
+
+The main thesis of the articles is that Obese employees affect the healthinsurance costs of their employer company, and these costs are rolled down to these employees in forms of reduced payment.
+But, the real question here is: is it really the health *insurence* that impacts the reduction in wage? or is it regardless of the insurance, just a general discrimination based on weight or appearance that impacts negatively wages of obese workers?
+For this, we want to check the effect of being insured on wage FOR OBESE people, versus the not being insured for obese people.
+For an even more rigorous check, a further check could be measuring the effects of being insured versus not being insured on NON-OBESE people, so the baseline effect of being insured on wage, and compare that.
+We will continue to check this effect for women only because of our group of interest (and the effect would likely be difference between genders, as wage impact was different in previous studies).
+We examine which kinds of insurance we have in our data.
+
+```{r}
+attach(women)
+#checking all insurance types.
+summary(d_hinsEMPOTH)  #--0
+summary(d_hinsEMP)     #0.7703 (77%) = employmer personal insurence
+summary(d_hinsINDCOV ) #--0
+summary(d_hinsNONE )   #0.2297   (23%) = no insurance
+summary(d_hinsPUBLIC)  #--0
+summary(d_hinsUNKNOWN) #--0
+
+#there are only women either with direct employer insurance, or with no insurance.
+
+```
+
+In our dataset there are only women either with direct employer insurance, or with no insurance at all.
+It it important to note that we have ONLY EMPLOYED observations in our dataset. If we would have contained unemployed people, they would bias the "wage reduction" estimate. In this case, they would be ONLY in the control (no employer insurance) group and bias the control groups average wage down significantly. Therefore, it is important that our data only contains EMPLOYED people. 
+
+We will now:
+1. Divide the data for "treatment and control" groups: insured versus uninsured
+2. Consider only obese people. 
+3. Perform matching to balance groups, and check the ATT effect. 
+4. later, will check within non obese people.
+
+
+```{r}
+### OBESE ###
+
+#1. Divide the data for "treatment and control" groups: insured versus uninsured
+insured <- nlsy[nlsy$d_sexf==1 & nlsy$d_hinsEMP==1,]
+uninsured <- nlsy[nlsy$d_sexf==1 & nlsy$d_hinsNONE==1,]
+nlsy$insured <- ifelse(nlsy$d_hinsEMP == 1, 1, 0)
+#checking if there are people with both EMP insurance and other insurance type
+#nrow(obese[obese$d_hinsEMP==1 & (obese$d_hinsNONE ==1 | obese$d_hinsEMPOTH ==1 | obese$d_hinsINDCOV ==1 | obese$d_hinsPUBLIC ==1 | obese$d_hinsUNKNOWN ==1 ) ,])
+
+#We'll create, for matching a column signifiying treatment: 1 if insured, 0 if not.
+
+
+##### GENERATING PROPENSITY SCORES ######
+#Method 1 to see correlation of obesity with other factors: General Linear Model
+#we will use this for propensity scores too
+
+glm.ins  <- glm(formula = nlsy$d_hinsEMP ~ nlsy$d_sexf + nlsy$childany + nlsy$childf + nlsy$age +  
+nlsy$d_urban_res + nlsy$srvy_yr + nlsy$AFQTrevised + nlsy$educ + nlsy$tenure + nlsy$NumberEmp + nlsy$d_race_b + nlsy$d_race_o + nlsy$d_marrnever + nlsy$d_marroth + nlsy$d_ind_ag + nlsy$d_ind_for + nlsy$d_ind_mining + nlsy$d_ind_const + nlsy$d_ind_mfrg + nlsy$d_ind_transp + nlsy$d_ind_wtrade + nlsy$d_ind_rtrade + nlsy$d_ind_finance + nlsy$d_ind_bus_svc + nlsy$d_ind_pers_svc + nlsy$d_ind_entert + nlsy$d_occ_mgmt + nlsy$d_occ_tech + nlsy$d_occ_admin + nlsy$d_occ_svc + nlsy$d_occ_farming + nlsy$d_occ_prodxn + nlsy$d_occ_operators , family=binomial, data=nlsy)
+
+summary(glm.ins)
+
+#Extract & Attach the propensity scores
+propensities.ins <- glm.ins$fitted.values
+nlsy <- cbind(nlsy,propensities.ins)
+
+
+#Divide the data into obese or not obese. 
+obese <- nlsy[nlsy$d_obese==1,]
+nonobese <- nlsy[nlsy$d_obese==0,]
+
+##### Matching #######
+library(Matching)
+#covariate in 'X' so as we have achieved balance on the covariates in #'BalanceMat'
+matchingvariables.obese = cbind(obese$propensities.ins, obese$d_sexf, obese$childany, obese$childf, obese$age, obese$d_urban_res, obese$srvy_yr, obese$educ, obese$d_race_b, obese$d_race_o, obese$d_marrnever, obese$d_marroth, obese$d_ind_ag, obese$d_ind_for, obese$d_ind_mining, obese$d_ind_const, obese$d_ind_mfrg, + obese$d_ind_transp, obese$d_ind_rtrade, obese$d_ind_finance, obese$d_ind_bus_svc, obese$d_ind_pers_svc, obese$d_ind_entert, obese$d_ind_prof_svc, obese$d_occ_mgmt, obese$d_occ_tech, obese$d_occ_admin, obese$d_occ_svc, obese$d_occ_farming, obese$d_occ_prodxn)
+#nrow(matchingvariables.obese)
+
+
+#3. Check Covariate Balance before matching:
+obese.ins.balance.pre <- MatchBalance(obese$d_hinsEMP ~ obese$propensities.ins + obese$d_sexf + obese$childany + obese$childf + obese$age + obese$d_urban_res + obese$srvy_yr + obese$educ + obese$d_race_b + obese$d_race_o + obese$d_marrnever + obese$d_marroth + obese$d_ind_ag + obese$d_ind_for + obese$d_ind_mining + obese$d_ind_const + obese$d_ind_mfrg + obese$d_ind_transp + obese$d_ind_rtrade + obese$d_ind_finance + obese$d_ind_bus_svc + obese$d_ind_pers_svc + obese$d_ind_entert + obese$d_ind_prof_svc + obese$d_occ_mgmt + obese$d_occ_tech + obese$d_occ_admin + obese$d_occ_svc + obese$d_occ_farming + obese$d_occ_prodxn , nboots=500)
+
+##covariates are not balanced. we will perform genetic matching.
+
+#Before Matching Minimum p.value: < 2.22e-16 
+#Variable Name(s): obese$propensities.ins obese$age obese$srvy_yr obese$educ obese$d_ind_mfrg obese$d_occ_mgmt #obese$d_occ_svc  Number(s): 1 5 7 8 17 25 28 
+
+
+
+#2 - key covariates = we don't match on covaraites which are least correlated with both treatment obesity low wages. We know that from the initial table. thes covariates would be:
+# d_occ_operators,tenure, NumberEmp, AFQTrevised, d_ind_wtrade
+
+#Let's call GenMatch() to find the optimal weight to give each
+#covariate in 'X' so as we have achieved balance on the covariates in #'BalanceMat'
+genout.ins.obese <- GenMatch(Tr=obese$d_hinsEMP, X=matchingvariables.obese, estimand="ATT", pop.size=100, max.generations=50, replace =TRUE, wait.generations=4)
+
+# Now that GenMatch() has found the optimal weights, let's actually match using those weights (using Weight.matrix=genout)
+mout.ins.obese <- Match(Y=obese$CPS_hourly_rec, Tr=obese$insured, X=matchingvariables.obese, estimand="ATT", M=1, replace = TRUE, Weight.matrix=genout.ins.obese )
+
+### examining post - genetic matching balance
+
+#Let's determine if balance has actually been obtained on the variables of interest
+
+obese.ins.balance.post <- MatchBalance(obese$d_hinsEMP ~ obese$propensities + obese$d_sexf + obese$childany + obese$childf + obese$age + obese$d_urban_res + obese$srvy_yr + obese$educ + obese$d_race_b + obese$d_race_o + obese$d_marrnever + obese$d_marroth + obese$d_ind_ag + obese$d_ind_for + obese$d_ind_mining + obese$d_ind_const + obese$d_ind_mfrg + obese$d_ind_transp + obese$d_ind_rtrade + obese$d_ind_finance + obese$d_ind_bus_svc + obese$d_ind_pers_svc + obese$d_ind_entert + obese$d_ind_prof_svc + obese$d_occ_mgmt + obese$d_occ_tech + obese$d_occ_admin + obese$d_occ_svc + obese$d_occ_farming + obese$d_occ_prodxn, 
+   match.out=mout.ins.obese, nboots=500)
+
+summary(mout.ins.obese)
+obese.ins.balance.post$BMsmallest.p.value
+obese.ins.balance.post$BMsmallestVarName
+obese.ins.balance.post$AMsmallest.p.value
+obese.ins.balance.post$AMsmallestVarName
+```
+
+Estimate...  4.2041 
+AI SE......  0.64237 
+T-stat.....  6.5447 
+p.val......  5.9605e-11 
+
+Original number of observations..............  6382 
+Original number of treated obs...............  4955 
+Matched number of observations...............  4955 
+Matched number of observations  (unweighted).  4955 
+
+```{r}
+
+##Estimating the Impact of Obesity on wages for white women, after Genetic Matching
+obese.ins.est <- mout.ins.obese$est
+print("estimate:") ; obese.ins.est[1]
+# 95% confidence intervals
+
+obese.ins.conf1 <- obese.ins.est - 1.96*(mout.ins.obese$se) 
+obese.ins.conf2 <- obese.ins.est + 1.96*(mout.ins.obese$se)
+print("Confidence Interval:")
+obese.ins.conf1[1] ;  obese.ins.conf2[1]
+
+
+```
+ Estimate:
+ 4.204137
+ Confidence Interval:
+  2.945091
+  5.463183
+The estimate is statistically significant.
+###Sensitivity Analysis
+```{r}
+#sensitivity analysis
+library(rbounds)
+psens(mout.ins.obese , Gamma=1.5, GammaInc=.1)
+hlsens(mout.ins.obese , Gamma=1.5, GammaInc=.1)
+
+```
+The sensitivity analysis show high robustness to hidden variabels; the assumption is not noticably senesitive to  unobsrved effects.
+
+## Non-Obese Difference
+
+```{r}
+#NON-obese.ins#
+#divide the data into obese.ins or not obese.ins. 
+nonobese.ins <- nlsy[nlsy$d_obese==0,]
+
+
+#Matching
+#covariate in 'X' so as we have achieved balance on the covariates in #'BalanceMat'
+matchingvariables.nonobese.ins = cbind(nonobese.ins$propensities.ins, nonobese.ins$d_sexf, nonobese.ins$childany, nonobese.ins$childf, nonobese.ins$age, nonobese.ins$d_urban_res, nonobese.ins$srvy_yr, nonobese.ins$educ, nonobese.ins$d_race_b, nonobese.ins$d_race_o, nonobese.ins$d_marrnever, nonobese.ins$d_marroth, nonobese.ins$d_ind_ag, nonobese.ins$d_ind_for, nonobese.ins$d_ind_mining, nonobese.ins$d_ind_const, nonobese.ins$d_ind_mfrg, nonobese.ins$d_ind_transp, nonobese.ins$d_ind_rtrade, nonobese.ins$d_ind_finance, nonobese.ins$d_ind_bus_svc, nonobese.ins$d_ind_pers_svc, nonobese.ins$d_ind_entert, nonobese.ins$d_ind_prof_svc, nonobese.ins$d_occ_mgmt, nonobese.ins$d_occ_tech, nonobese.ins$d_occ_admin, nonobese.ins$d_occ_svc, nonobese.ins$d_occ_farming, nonobese.ins$d_occ_prodxn)
+nrow(matchingvariables.nonobese.ins)
+typeof(matchingvariables.nonobese.ins)
+
+
+#3. Check Covariate Balance before matching:
+library(Matching)
+nonobese.ins.balance.pre <- MatchBalance(nonobese.ins$d_hinsEMP ~ nonobese.ins$propensities.ins + nonobese.ins$d_sexf + nonobese.ins$childany + nonobese.ins$childf + nonobese.ins$age + nonobese.ins$d_urban_res + nonobese.ins$srvy_yr + nonobese.ins$educ + nonobese.ins$d_race_b + nonobese.ins$d_race_o + nonobese.ins$d_marrnever + nonobese.ins$d_marroth + nonobese.ins$d_ind_ag + nonobese.ins$d_ind_for + nonobese.ins$d_ind_mining + nonobese.ins$d_ind_const + nonobese.ins$d_ind_mfrg + nonobese.ins$d_ind_transp + nonobese.ins$d_ind_rtrade + nonobese.ins$d_ind_finance + nonobese.ins$d_ind_bus_svc + nonobese.ins$d_ind_pers_svc + nonobese.ins$d_ind_entert + nonobese.ins$d_ind_prof_svc + nonobese.ins$d_occ_mgmt + nonobese.ins$d_occ_tech + nonobese.ins$d_occ_admin + nonobese.ins$d_occ_svc + nonobese.ins$d_occ_farming + nonobese.ins$d_occ_prodxn , nboots=500)
+
+
+#covariates are not very balanced. we will perform genetic matching.
+
+#2 - key covariates = we don't match on covaraites which are least correlated with both treatment obesity low wages. We know that from the initial table. thes covariates would be:
+# d_occ_operators,tenure, NumberEmp, AFQTrevised, d_ind_wtrade
+
+#Let's call GenMatch() to find the optimal weight to give each
+#covariate in 'X' so as we have achieved balance on the covariates in #'BalanceMat'
+genout.ins.nonobese.ins <- GenMatch(Tr=nonobese.ins$d_hinsEMP, X=matchingvariables.nonobese.ins, estimand="ATT", pop.size=100, max.generations=50, replace =TRUE, wait.generations=3, caliper=0.3)
+
+# Now that GenMatch() has found the optimal weights, let's actually match using those weights (using Weight.matrix=genout)
+mout.ins.nonobese.ins <- Match(Y=nonobese.ins$CPS_hourly_rec, Tr=nonobese.ins$insured, X=matchingvariables.nonobese.ins, estimand="ATT", M=1, replace = TRUE, Weight.matrix=genout.ins.nonobese.ins)
+
+
+### examining post - genetic matching balance
+
+#Let's determine if balance has actually been obtained on the variables of interest
+
+nonobese.ins.balance.post <- MatchBalance(nonobese.ins$d_hinsEMP ~ nonobese.ins$propensities.ins + nonobese.ins$d_sexf + nonobese.ins$childany + nonobese.ins$childf + nonobese.ins$age + nonobese.ins$d_urban_res + nonobese.ins$srvy_yr + nonobese.ins$educ + nonobese.ins$d_race_b + nonobese.ins$d_race_o + nonobese.ins$d_marrnever + nonobese.ins$d_marroth + nonobese.ins$d_ind_ag + nonobese.ins$d_ind_for + nonobese.ins$d_ind_mining + nonobese.ins$d_ind_const + nonobese.ins$d_ind_mfrg + nonobese.ins$d_ind_transp + nonobese.ins$d_ind_rtrade + nonobese.ins$d_ind_finance + nonobese.ins$d_ind_bus_svc + nonobese.ins$d_ind_pers_svc + nonobese.ins$d_ind_entert + nonobese.ins$d_ind_prof_svc + nonobese.ins$d_occ_mgmt + nonobese.ins$d_occ_tech + nonobese.ins$d_occ_admin + nonobese.ins$d_occ_svc + nonobese.ins$d_occ_farming + nonobese.ins$d_occ_prodxn, 
+   match.out=mout.ins.nonobese.ins, nboots=500)
+
+nonobese.ins.balance.post
+```
+
+
+Matching Results.
+
+Before Matching Minimum p.value: < 2.22e-16 
+Variable Name(s): nonobese.ins$propensities.ins nonobese.ins$d_sexf nonobese.ins$childany nonobese.ins$age nonobese.ins$srvy_yr nonobese.ins$educ nonobese.ins$d_race_b nonobese.ins$d_marrnever nonobese.ins$d_marroth nonobese.ins$d_ind_ag nonobese.ins$d_ind_const nonobese.ins$d_ind_mfrg nonobese.ins$d_ind_transp nonobese.ins$d_ind_rtrade nonobese.ins$d_ind_finance nonobese.ins$d_ind_bus_svc nonobese.ins$d_ind_pers_svc nonobese.ins$d_ind_prof_svc nonobese.ins$d_occ_mgmt nonobese.ins$d_occ_tech nonobese.ins$d_occ_admin nonobese.ins$d_occ_svc nonobese.ins$d_occ_farming nonobese.ins$d_occ_prodxn  Number(s): 1 2 3 5 7 8 9 11 12 13 16 17 18 19 20 21 22 24 25 26 27 28 29 30 
+
+After Matching Minimum p.value: < 2.22e-16 
+Variable Name(s): nonobese.ins$propensities.ins nonobese.ins$d_sexf nonobese.ins$childany nonobese.ins$age nonobese.ins$d_urban_res nonobese.ins$srvy_yr nonobese.ins$educ nonobese.ins$d_race_b nonobese.ins$d_marrnever  Number(s): 1 2 3 5 6 7 8 9 11 
+
+Matching improved the balanced for 16 covariates, and for most of them it has improves substantially, some to p-value of 1.
+It is important to notice though that it hasn't improved it for these covariates and our results might be biased because of them.
+
+
+```{r}
+summary(mout.ins.nonobese.ins)
+summary(nonobese.ins.balance.post)
+nonobese.ins.balance.post$BMsmallest.p.value
+nonobese.ins.balance.post$AMsmallest.p.value
+
+
+##Estimating the Impact of Obesity on wages for white women, after Genetic Matching
+nonobese.ins.est <- mout.ins.nonobese.ins$est
+
+# 95% confidence intervals
+nonobese.ins.conf1 <- nonobese.ins.est - 1.96*(mout.ins.nonobese.ins$se) 
+nonobese.ins.conf2 <- nonobese.ins.est + 1.96*(mout.ins.nonobese.ins$se)
+print("Conf Int")
+nonobese.ins.conf1 ;  nonobese.ins.conf2
+
+#Sensitivity Analysis
+library(rbounds)
+psens(mout.ins.nonobese.ins , Gamma=1.5, GammaInc=.1)
+hlsens(mout.ins.nonobese.ins , Gamma=1.5, GammaInc=.1)
+
+
+```
+
+Estimate...  4.5402 
+AI SE......  0.44407 
+T-stat.....  10.224 
+p.val......  < 2.22e-16 
+Confidence Interval
+
+ 3.669838
+ 5.41058
+
+
+Original number of observations..............  24794 
+Original number of treated obs...............  19059 
+Matched number of observations...............  19059 
+Matched number of observations  (unweighted).  19059 
+
+Not Sensitive:
+Unconfounded estimate ....  0 
+
+## Difference Between Obese and Non Obese Differences
+
+```{r} 
+#Difference Between Obese and Non Obese Differences#
+
+print("Baseline (Non Obese) Estimated Effect and Confidence Interval:")
+nonobese.ins.est #baseline (for nonobsese)
+nonobese.ins.conf1[1] ;  nonobese.ins.conf2[1]
+
+print("Baseline (Non Obese) Estimated Effect and Confidence Interval:")
+obese.ins.est    #impact of insurance for obese
+obese.ins.conf1[1] ;  obese.ins.conf2[1]
+
+```
+
+##### plot differences and confidence intervals
+```{r}
+
+
+
+barplot()
+
+library(ggplot2)
+ggplot( aes(x=c(), y=len, fill=supp)) + 
+    geom_bar(position=position_dodge(), stat="identity",
+             colour="black", # Use black outlines,
+             size=.3) +      # Thinner lines
+    geom_errorbar(aes(ymin=len-se, ymax=len+se),
+                  size=.3,    # Thinner lines
+                  width=.2,
+                  position=position_dodge(.9)) +
+    xlab("Dose (mg)") +
+    ylab("Tooth length") +
+    scale_fill_hue(name="Supplement type", # Legend label, use darker colors
+                   breaks=c("OJ", "VC"),
+                   labels=c("Orange juice", "Ascorbic acid")) +
+    ggtitle("The Effect of Vitamin C on\nTooth Growth in Guinea Pigs") +
+    scale_y_continuous(breaks=0:20*4) +
+    theme_bw()
+
+```
+
+
+
+#Quantile Regression
+
+Quantile regression allows us to see how different types of participants were impacted. Specifically, it allows us to see how different types of participants were impacted allows us to see how the impact  of a chosen covariate on different quantiles of the outcome's distribution, and thus provides a complete picture of the relationship between Y and X. It allows us to undrstand better how different types of participants were impacted, and be robust to outliers in y observations.
+
+We wanted to see the more refined gradual affect of BMI (instead of boolean "Obese" or not) on wages, and to see the different quantiles of the distribution of wages on the BMI axis.
+We wanted firstly to examine the trends of *average wage by BMI* for women, and then examine results for men.
+
+
+
+
+```{r}
+
+#install.packages("quantreg")
+library(quantreg)
+
+
+#Define dependent (Y) and independent (X) variables:
+#for our quantile regression, we want to see seperately, the effects on wages at different quantiles, made by:
+#obesity
+Y=cbind(nlsy$CPS_hourly_rec)
+X=cbind(nlsy$d_obese)
+
+# we will plot histogram and density function line for the dependent variable:
+hist(Y, prob=TRUE, col = "blue", border = "black")
+plot(density(Y),col="blue", xlab = "Wage", main = "Density Distribution of Wages")
+
+# Run linear regression
+
+OLSreg=lm(Y~X)
+summary(OLSreg)
+
+
+```
+
+We see that the distribution of wages highly peaked and skewed at around 10-20.
+
+### Running Quantile Regressions
+```{r}
+#Running 0.25 Quantile regression
+Qreg25=rq(Y~X, tau=0.25)
+summary(Qreg25)
+
+Qreg75=rq(Y~X, tau=0.75)
+summary(Qreg75)
+
+#are they different? use anova test to check.
+anova(Qreg25, Qreg75)
+
+
+```
+They are different, meaning statistically significant (under 5%).
+
+
+
+```{r}
+
+#This quantile regression plotting is adapted from the original paper of Roger Koenker presenting Quantile Regression:
+#https://cran.r-project.org/web/packages/quantreg/vignettes/rq.pdf
+library(quantreg)
+
+#taking only people with employee insurance
+women <- women[women$d_hinsEMP ==1,]
+X = women$BMI
+Y = women$CPS_hourly_rec
+
+summary(lm(Y~X))
+
+plot(X,Y,cex=.25,type="n",xlab="BMI", ylab="Wage",main = "WOMEN - Wage over BMI")
+points(X,Y,cex=.2,col="pink")
+abline(rq(Y~X,tau=.5),col="pink")
+abline(lm(Y~X),lty=2,col="black") #the dreaded ols line
+taus <- c(.05,.1,.25,.75,.90,.95)
+
+for( i in 1:length(taus)){
+    abline(rq(Y~X,tau=taus[i]),col="gray")
+}
+
+
+men <- nlsy[nlsy$d_sexf==0 & nlsy$d_hinsEMP==1,]
+X = men$BMI
+Y = men$CPS_hourly_rec
+
+summary(lm(Y~X))
+
+
+plot(X,Y,cex=.25,type="n",xlab="BMI", ylab="Wage", main = "MEN - Wage over BMI")
+points(X,Y,cex=.2,col="green")
+abline(rq(Y~X,tau=.5),col="green")
+abline(lm(Y~X),lty=2,col="black") #the dreaded ols line
+taus <- c(.05,.1,.25,.75,.90,.95)
+
+for( i in 1:length(taus)){
+    abline(rq(Y~X,tau=taus[i]),col="gray")
+}
+
+
+
+```
+
+We see the linear regression trends for women and men are in opposite directions!
+
+But mostly, we see that there are many outliers at the top. Therefore, we might prefer to look at median outcomes instead of mean or aggregate. Therefore, the quantiles here help.
+
+
+
+```{r}
+
+#Take the matched dataset
+T1 <- mout.white.women$index.treated
+T0 <- mout.white.women$index.control
+X1 <- white_women$BMI[mout.white.women$index.treated]
+X0 <- white_women$BMI[mout.white.women$index.control]
+Y1 <- (white_women$CPS_hourly_rec[mout.white.women$index.treated])
+Y0 <- (white_women$CPS_hourly_rec[mout.white.women$index.control])
+summary(T1)
+summary(T0)
+
+#
+quants_treat <- quantile(Y1, probs = seq(0,1,0.05))
+quants_control <- quantile(Y0, probs = seq(0,1,0.05))
+plot(quants_treat)
+plot(quants_control)
+#the quantile of the effects of obesity on wage
+plot(quants_treat-quants_control)
+
+plot.new()
+plot(c(0,0.25,0.50,0.75,1) ,quantile(T1)-quantile(T0))
+plot(quantile(T1))
+#the effects reduce as we get closer to zero becuase the wages are small and close to zero for the poorest people anyway
+
+plot(lm(white_women$CPS_hourly_rec[mout.white.women$index.treated]~white_women$BMI[mout.white.women$index.treated]))
+
+plot(lm(X1~Y1))
+
+
+```
+
+
+```{r}
+
+## I see that the outliers interfere me from seeing the graph well under. I'll create a graph for non-outliers.
+###treatment
+quants_treat[20]
+
+T1cleaned <- mout.white.women$index.treated[Y1 < (quants_treat[20])]
+Y1_cleaned2 <- quantile(Y1, probs = seq(0,1,0.05))
+
+Y1cleaned <- white_women$CPS_hourly_rec[T1cleaned]
+X1cleaned <- white_women$BMI[T1cleaned]
+plot(Y1cleaned ~ X1cleaned)
+
+
+###control
+#there is also 1 outlier witha  wage of 1$ per hour that skews the plot, we'll drop them too.
+T0cleaned <- mout.white.women$index.control[(Y0 < quants_control[20]) & (Y0 > (quants_control[2]+1))]
+Y0cleaned <- white_women$CPS_hourly_rec[T0cleaned]
+X0cleaned <- white_women$BMI[T0cleaned]
+plot(Y0cleaned ~ X0cleaned)
+
+
+ggplot(mapping=aes(x = X0cleaned, y = Y0cleaned)) +
+  geom_point(aes(x = X0cleaned, y = Y0cleaned)) +
+  geom_smooth() 
+
+```
+
+
+```{r}
+
+ggplot(mapping=aes(x = X1cleaned, y = Y1cleaned)) +
+  geom_point(aes(x = X1cleaned, y = Y1cleaned)) +
+  geom_smooth(aes(color="red"))
+
+```
+
+
+
+```{r}
+#Together
+Xallcleaned <- c(X0cleaned, X1cleaned)
+Yallcleaned <- c(Y0cleaned, Y1cleaned)
+
+ggplot(mapping=aes(x = Xallcleaned, y = Yallcleaned,colour=(Xallcleaned<30))) +
+  geom_point(aes(x = Xallcleaned, y = Yallcleaned)) +
+  geom_smooth() +
+  labs(title="Regression Discontinuity of Wage on BMI for White Women", x="BMI",y="Wage Per Hour in $", colour="Obesity"  ) +
+scale_colour_discrete(name  ="Group",
+                            labels=c("Obese", "Not Obese"))
+
+```
+
+
+###regression discontinuity
+```{r}
+install.packages("rdrobust")
+library(rdrobust)
+install.packages("rdd")
+library(rdd)
+
+
+ggplot(mapping=aes(x = Xallcleaned, y = Yallcleaned,colour=(Xallcleaned<30))) +
+  geom_point(aes(x = Xallcleaned, y = Yallcleaned)) +
+  labs(title="Wage on BMI for White Women", x="BMI",y="Wage Per Hour in $", colour="Obesity"  ) +
+scale_colour_discrete(name  ="",
+                            labels=c("Obese Group", "(Local Regression)","Not Obese Group")) +
+  geom_smooth(aes(color="Local Regression")) 
+
+
+
+
+```
+
+
+###Regression Discontinuity
+```{r}
+
+
+rdrobust(y=Yallcleaned, x=Xallcleaned, c = 30,  fuzzy = NULL, deriv = 0, p = 1, q = 2, 
+                h = NULL, b = NULL, rho = NULL, covs = NULL,  kernel = "tri", 
+                weights = NULL, bwselect = "mserd", vce = "nn", cluster = NULL, 
+                nnmatch = 3, level = 95, scalepar = 1, scaleregul = 1, 
+                sharpbw = FALSE, all = FALSE, subset = NULL)
+
+
+```
+
+First, I dropped the outliers with the largest wage per hour - the top 5%, and the 2 observations with unusually small wage (the bottom 5%). We are concerned here about the average, or more accurately - the median effect, or the pattern for most of the data. These outliers were few and extremely skeweing the data and the resulting curves in ways that don't reflect accurately 90% of the data. Thus we prefer to accurately reflect 90% of the data.  
+Regression Discontinuity shows us that althgouh there seems to be an average estimated effect of -$2.21 around the "cutoff", it is not significant.
+The confidence interval around that effect is between -5.8277 and 1.4058, therefore we can't say at 95% confidence that it is positive or negative, meaning that there exist a significant effect.
+We can see that in the plot: although there is a visible cutoff, the confidence intervals around it from both sides overlap; therefore it is not necessarily significant.
+
+This makes sense as a result from regression discontinuity analysis, since although people are "defined" as obese when their BMI is above 30, in reality, there is no harsh cutoff that you can see if someone has a BMI of 29 or 31. Regression discontuity designs are best utilized when the "treatment" involved an actual intervention for the treated group; but in our case, we want to consider the impact of obesity, considering obesity as the treatment - but it is not an actual intervention. Therefore, except for BMI, there was nothing really seperating the people just below and just above BMI of 30. 
+Moreover, this effect could be also due to the sensitivity of the data itself. I use the Matched data from groups of obese vs non-obese. The matched sample shows a peculiarity: there is less data just below 30 than there is just above 30. This might be because the matching procedure didn't find these units with BMI just below 30 as good fits for anyone in the treatment grou, and thus dropped more units there. We see that there are far less units at the bottom (with low salaries) just below BMI=30 as there are for all other BMIs (until 40 at least). Thus, the local regression at that point is more sensitive to the observations left, and the lack of bottom units skewed the local regression upwards. Logically, I can think of no good reason for why there would be actually less comparable units at that range with low wages just below 30 than there are in any other BMI range; Nor there seems to be any good reason for people with BMI of just above 30 to be discriminated than from people just below 30. The only potential reason would have been only if they were actually penalized by having employer health insurance for being defined as obese by the insurance; but this would both requiere the assumptions that employers know their employees exact BMI /obesity definition / individual insurance coverege, which is unlikely, and penalize accordingly; moreover, our eamination of the impact of insurance shows the opposite trend! if anything, insurance had a positive effect on people's wages.
+
+

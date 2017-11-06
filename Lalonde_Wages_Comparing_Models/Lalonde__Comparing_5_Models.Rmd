@@ -1,0 +1,581 @@
+---
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+title: "CS112 Lalonde:Matching"
+output: html_notebook
+---
+```{r}
+# Load the libraries
+library(foreign)
+library(Matching)
+library(rgenoud)
+
+```
+
+```{r}
+# Load the data
+dw <- read.dta("nsw_dw.dta")
+```
+
+## 1: Simple Average Treatment Effect in Randomized Experiment
+Calculating the simple averge treatment effect: the difference of means
+
+
+```{r}
+#Treatment Effects: a simple difference in means
+TEdw <- mean(dw[dw$treat == 1,]$re78) -  mean(dw[dw$treat == 0,]$re78)  
+#mean(dw[dw$treat == 1,]$re78) ; mean(dw[dw$treat == 0,]$re78) 
+TEdw
+```
+The overall ATE average treatment affect is 1794.342.
+
+####confidence intervals for the results:
+```{r}
+#confidence interval by running a univariate linear regression (with just the treat variable)
+lm1 <- lm(re78 ~ treat, data=dw) 
+confint(lm1, level=0.95)  ; #summary(lm1)
+```
+
+Confidence interval for simple ATE of 95% is: 550.5749 to 3038.111.
+
+for the overall ATE average treatment affect is 1794.342, and a 95% confidence interval shows we are 95% sure that the true treatment effect will be between 550.5749 and 3038.111, which is an (undesirably) a very wide range; the low end would show little effect, the upper end is actually close to the entire control groups' mean ($4554), meaning that the true effect could have been close to increasing their earnings by 1.5 (while the lower end is only marginally significant).
+
+## 2: Average Treatment Effect With Observational Sample as Control
+
+
+```{r}
+#load cps_controls.dta as control group
+cps_controls <- read.dta("cps_controls.dta")
+treated <- dw[dw$treat == 1,]
+
+#Treatment Effects: a simple difference in means
+
+TE.cps <- mean(treated$re78) -  mean(cps_controls$re78)  
+ #mean(treated$re78)
+ #mean(cps_controls$re78)  
+TE.cps
+
+#COMBINE DW treated group to cps group into one dataset
+# It's helpful to use DW here since it has re74 data, like cps (unlike NSW)
+#(cpscombined <- cps_controls)
+
+  #checking they have the same columns and underlying data structure
+  #names(cps_controls) ; names(dw)
+  #head(cps_controls) ; head(dw)
+
+cpscombined <- rbind(treated,cps_controls)
+
+# convert {1/0}s to TRUE and FALSE, necessary for later used functions:
+cpscombined$treat <- cpscombined$treat == 1 
+```
+The overall ATE average treatment affect is -8497.516, which is worringly negative. 
+
+
+####Confidence intervals for the results:
+```{r}
+
+
+#confidence interval by running a univariate linear regression (with just the treat variable)
+lm2.cps <- lm(re78 ~ treat, data=cpscombined) 
+confint(lm2.cps, level=0.95)
+#summary(lm2.cps)
+```
+
+The simple average treatment effect between the treated from the experiment and the cps_controls seems extremely negative : -8497.516, and with 95% confidence interval would be found within -9893.156 to -7101.877 (which is relatively close effect).
+
+If this would be an actually representative measure of comparing well-balanced groups, it would hint that our program might not only be "not benefitting"", but actually HARMING, compared to the alternatives that our control group had. 
+However, we must not jump to conclusions quickly from this superficial measure. Looking at the cps control 78 income, they are overall much higher. It seems that there might be inherent differences between the groups and that the cps group is a group with higher earnings anyway; therefore, they are not suitable for comparison; they aren't well balanced or matching our treatment groups, thus are not suitable to serve as their counterfactuas. 
+ Additionally, there are other measures to be made, for example - median or quantile regression, that might show us different measures, for example, if there are a few outliers which drag the average severly
+
+
+## 3: PROPOENSITY SCORE MATCHING
+###Using Propensity Score Matching to produce an estimated treatment effect and confidence interval. 
+
+
+### 3.1 Estimating Balance of key covariates on the dataset before
+```{r}
+#  running balance tests (t-tests) for key covariates on the dw data before mathcing (FYI: the results show balance) 
+attach(cpscombined)
+MatchBalance(treat~ age + black + hispanic + nodegree + re75 + re78, data=cpscombined, nboots=500)
+```
+Shows very low p-values, many of them even around 2.22e-16. 
+P-values are low and most var ratios between (Treatment/Control) are very low.
+This suggests we shuold indeed use Matching.
+
+Before Matching Minimum p.value: < 2.22e-16 
+Variable Names: age black nodegree re75 re78  
+
+
+
+### 3.2 propensity score matching
+```{r}
+# Carrying out propensity score matching
+
+# Estimate the propensity model: Fitting Generalized Linear Models to later find weights
+glm.cps  <- glm(formula = treat ~ age + I(age^2) + education + I(education^2) + 
+                  black + hispanic + married + nodegree + re74  + I(re74^2) 
+                + re75 +  I(re75^2) , family=binomial, data=cpscombined)
+propensities <- glm.cps$fitted.values
+#summary(glm.cps)
+
+#save data objects for matching according to glm cps
+X  <- propensities
+Y  <- cpscombined$re78
+Tr  <- cpscombined$treat
+
+
+# one-to-one matching with replacement (the "M=1" option).
+# Estimating the treatment effect on the treated (the "estimand" option defaults to ATT).
+#
+rr0  <- Match(Y=Y, Tr=Tr, X=X, M=1, estimand = "ATT", BiasAdj=FALSE, replace=TRUE,  sample = TRUE) #, caliper = 0.24)
+#- when using caliper, it gave worse balance and worse results.
+summary(rr0)
+#Interpretation: AI SE is matching corrected standard error due to Abadie and Imbens (hence the name AI). 
+
+```
+
+Finding Confidence Intervals for the estimated treatment effect
+```{r}
+#estimated treatment effect
+est1 = rr0$est ; est1
+
+#confidence intervals
+error = 1.96*(982.99) ; error
+confint1.low <- est1 - error  ;  confint1.up <- est1 + error  ; 
+confint1.low ; confint1.up
+```
+
+####Summary of results for (3)
+
+#####Without using caliper:
+The resulting treatment effect was: 1732.9
+Confidence interval of:
+ [-193.7244 , 3659.596]
+ Which crosses zero, therefore the treatment effect is not statistically significant. In other words, this doesn't reject the null hypothesis that our treatment has no significant effect.
+######With using the best caliper found:
+The resulting treatment effect was: 1646.766
+With the confidence interval of:
+[-279.8944 , 3573.426]
+
+#### Trying to find optimal caliper. 
+**Eventually, Not using Caliper proved to be better.**
+Althought the Caliper parameter might be tricky, I tried to explore the Caliper parameter.
+To optimize the tradeoff between achieving only exact matching (caliper = 0) to matching unsimilar units, I slowly increased the caliper until finding a small enough caliper which still doesn't drop too many units (since we have only 185 treated units initially), while still achieving small SE. When I increased the caliper to 0.24, the number of excluded unites reduced from 7 to 3, while the estimands of the results (the Estimate itself, the corrected Standard Error here called AI SE, and the T-stat and P-value) remained low and similar to before. 
+
+It's useful to note that changing the caliper size actually changed the resulting estimations, so there is room for subjectivity or reseracher-induced variance here.
+
+So this matching resulted in that, for the caliper of 0.24, we exculed only 3 treated units that we didn't find a good counterfactual for.
+In this matching, the estimated ATT was a positive **$1646.8**, with SE of 957.17;
+For the original number of treated obs, 185 we matched a counterfactual for 182 units (out of a pool of 16177), which were weighthed combinations of 3684 units. 
+Matched number of observations...............  167 
+Matched number of observations  (unweighted).  3667 
+
+Caliper (SDs)........................................   0.1 
+Number of obs dropped by 'exact' or 'caliper'  18 
+
+**However, without caliper we achieved better results.**
+
+Estimate...  1732.9 
+AI SE......  982.99 
+T-stat.....  1.7629 
+p.val......  0.077915 
+
+Original number of observations..............  16177 
+Original number of treated obs...............  185 
+Matched number of observations...............  185 
+Matched number of observations  (unweighted).  3687 
+
+
+###3.3 Checking the covariate balance
+```{r}
+ 
+# Checking the covariate balance
+# 'nboots' is automatically set to small values in the interest of speed, and should be increased to at least 500 each for publication quality p-values.  
+mb  <- MatchBalance(treat ~ age + I(age^2) + education + I(education^2) + black +  hispanic + married + nodegree + re74  + I(re74^2) + re75  + I(re75^2), data=cpscombined, match.out=rr0, nboots=500)
+
+```
+
+Before Matching Minimum p.value: < 2.22e-16 
+Variable Name(s): age I(age^2) education I(education^2) black married nodegree re74 I(re74^2) re75 I(re75^2)  
+
+After Matching Minimum p.value: < 2.22e-16 
+Variable Name(s): age I(age^2) education I(education^2) re74 I(re74^2) re75 I(re75^2) 
+
+
+We didn't increased our smallest p-value, but we did reduce the number of variables with small p-values (we improved the p-values for black, married, and nodegree). This Matching increased many of p-values, and also the var ratio (Tr/Co) to be more balanced and closer to 1.
+This is because propensity scores mathcing only considers one-dimentional space of the "propensity score" to match on; so we lose the valuabel information of WHICH covariates afftected the "chance to be in the treatment group"; and we don't match units who are actually similar in many parameters, but only in the sense of "how likely they are to be in the treatment group".
+
+
+
+## 4: MULTIVARIATE MATCHING. 
+### running a multivariate matching procedure that uses all the covariates and also includes the estimated propensity scores, to produce an estimated treatment effect and confidence intervals. 
+
+
+
+```{r}
+# Carrying out MULTIVARIATE MATCHING (including propensity scores)
+cpscombined <- rbind(treated,cps_controls)
+
+# convert {1/0}s to TRUE and FALSE, necessary for functions:
+cpscombined$treat <- cpscombined$treat == 1 
+attach(cpscombined)
+
+# Estimate the propensity model: Fitting Generalized Linear Models to later find weights
+glm.cps2  <- glm(formula = treat ~ age + I(age^2) + education + I(education^2) + 
+                  black + hispanic + married + nodegree + re74  + I(re74^2) 
+                + re75 +  I(re75^2) , family=binomial, data=cpscombined)
+
+#summary(glm.cps)
+propensities2 = glm.cps$fitted.values
+
+
+#combining the dataset with the propensity scores
+cps.prop <- cbind(cpscombined,propensities)
+attach(cps.prop)
+
+
+#save data objects for matching according to glm cps
+X2.sq  <- cbind(propensities2, age , I(age^2) , education , I(education^2),    black , hispanic , married , nodegree , re74  , I(re74^2) ,re75 ,  I(re75^2))
+Y2  <- cps.prop$re78
+Tr2  <- cps.prop$treat
+
+# one-to-one matching with replacement (the "M=1" option).
+# Estimating the treatment effect on the treated (the "estimand" option defaults to ATT).
+#
+rr2.sq  <- Match(Y=Y2, Tr=Tr2, X=X2.sq, M=1, estimand = "ATT", BiasAdj=FALSE, replace=TRUE, caliper = 0.75,  sample = TRUE) ; summary(rr2.sq)
+
+
+#Interpretation: AI SE is matching corrected standard error due to Abadie and Imbens (hence the name AI). 
+
+```
+
+###4.1 Multivariate Matching including second order covariates
+Estimate...  1479 
+AI SE......  825.62 
+T-stat.....  1.7914 
+p.val......  0.073234 
+For this mathcing, since it considers matching onto so many covariates, when the caliper is set to low, it drops many observations wihtout finding suitable counterfactuals for them.
+Therefore I had to increase the caliper by much. By increasing it to 0.5, the number of dropped obs decreased to 40, and stayed around that until increasing to caliper=0.75 where that number of obs dropped by 'caliper' was **16**.
+
+
+##### (4.1) Finding Confidence Intervals for the estimated treatment effect
+```{r}
+#estimated treatment effect
+est2 = rr2.sq$est ; est2
+
+#confidence intervals
+error = 1.96*(825) ; error
+confint2.low <- est2 - error  ;  confint2.up <- est2 + error  ; 
+confint2.low ; confint2.up
+```
+
+#### (4.1) Results of Multivariate Matching including second order terms
+Here, after 1-1 matching with replacement of caliper 0.75 (distance from all the covariates, including squared ones), the treatment affect mean appears to be  a positive **1617**, but the confidence interval {-138,3096} crosses 0 to also the negative side, meaning it's not staitsitcally significant. We can't say with 95% certainty that the mean treatment effect is actually positive at all.
+
+
+
+#### (4.1) Checking the covariate balance
+
+```{r}
+ 
+# Checking the covariate balance
+# 'nboots' is automatically set to small values in the interest of speed, and should be increased to at least 500 each for publication quality p-values.  
+mb2  <- MatchBalance(treat ~ age + I(age^2) + education + I(education^2) + black +
+             hispanic + married + nodegree + re74  + I(re74^2) + re75         +          I(re75^2), data=cpscombined, match.out=rr2.sq, nboots=500)
+
+
+
+
+```
+
+
+We didn't increase our smallest p-value, but we did reduce the number of variables with small p-values and increased the majority of p-values to be much higher.
+
+
+
+## 4.2 Multivariate Matching of only Linear terms
+To see if our matching balance improves if we reduce the number of necessary covariates - the second order terms, we'll check that too:
+
+```{r}
+
+#defnining another set of predictors without the squared terms, for a second trial:
+X2.lin  <- cbind(propensities, age , education , 
+                 black , hispanic , married , nodegree , re74 ,
+                re75)
+
+#multivariate matching with only linear, first order terms:
+rr2.lin.caliper  <- Match(Y=Y2, Tr=Tr2, X=X2.lin, M=1, estimand = "ATT", BiasAdj=FALSE, replace=TRUE, caliper = 0.75,  sample = TRUE) ; summary(rr2.lin.caliper)
+
+rr2.lin.nocaliper  <- Match(Y=Y2, Tr=Tr2, X=X2.lin, M=1, estimand = "ATT", BiasAdj=FALSE, replace=TRUE,   sample = TRUE) ; summary(rr2.lin.nocaliper)
+
+
+```
+The results of this Linear Multivariate matching are better than the previous ones.
+This time, chosing a suitable caliper, (which drops 14 units) - actually IMPROVED the results and the balance!
+the mean estimated treatment effect is 1972.5.
+
+With the caliper of 0.75, the first one to reduce significantly below the number of dropped units below 30 down to "only"" 14 dropped units:
+Estimate...  1972.5 
+AI SE......  920.67 
+T-stat.....  2.1425 
+
+
+
+##### (4.2) Finding Confidence Intervals for the estimated treatment effect
+```{r}
+#estimated treatment effect
+est3 = rr2.lin.caliper$est ;
+est3
+#confidence intervals
+error = 1.96*(920) ; error
+confint3.low <- est3 - error  ;  confint3.up <- est1 + error  ; 
+confint3.low ; confint3.up
+```
+
+
+#### (4.2) Results of Multivariate Matching with only linear terms 
+
+This Linear Multivariate Matching (without higher-order versions of covariates or interaction terms) shows more favorable results;
+The average treatment effect is 1972, and the confidence interval {169,3450} is large, but always positive, thus statistically significant.
+
+
+#### (4.2) Checking the covariate balance of First Order terms Multivariate Matching
+```{r}
+ 
+# Checking the covariate balance
+# 'nboots' is automatically set to small values in the interest of speed, and should be increased to at least 500 each for publication quality p-values.  
+mb2  <- MatchBalance(treat ~ cps.prop$propensities + age  + education + black +  hispanic + married + nodegree + re74  + re75, data=cps.prop, match.out=rr2.lin.caliper, nboots=500)
+
+
+
+```
+
+**RESULTS:
+Before Matching Minimum p.value: < 2.22e-16 
+Variable Name(s): cps.prop$propensities age education black married nodegree re74 re75  Number(s): 1 2 3 4 6 7 8 9 
+
+After Matching Minimum p.value: 0.013752 
+Variable Name(s): cps.prop$propensities  Number(s): 1 
+
+With the nonlinear terms, we actually got a slightly better lowest p value: 0.07 vs. p=0.013. However, with no linear terms, this low p-value was found only for 1 variable, whereas for the 
+
+
+
+
+## 5: GenMatch
+### 5.1: GenMatch Propensity Scores Only
+
+
+
+```{r}
+
+#The covariates we want to match on
+X51 <- propensities
+
+#The covariates we want to obtain balance on
+BalanceMat51 <- propensities
+
+#Let's call GenMatch() to find the optimal weight to give each
+#covariate in 'X' so as we have achieved balance on the covariates in #'BalanceMat'
+
+genout <- GenMatch(Tr=treat, X=X51, BalanceMatrix=BalanceMat51, estimand="ATT", M=1, pop.size=100, max.generations=50, replace = TRUE,  wait.generations=4 ) #I increased the pop.size to 150 and max.generations to 100 but not for this run
+#genout
+
+#The outcome variable
+Y=re78
+
+#
+# Now that GenMatch() has found the optimal weights, let's estimate
+# our causal effect of interest using those weights (using Weight.matrix=genout)
+
+mout1 <- Match(Y=Y, Tr=treat, X=X51, estimand="ATT", M=1, replace = TRUE, Weight.matrix=genout)
+summary(mout1)
+
+#                        
+#Let's determine if balance has actually been obtained on the variables of interest
+#                        
+mb1 <- MatchBalance(treat~ propensities+age+education+black+hispanic+ married+ nodegree+ re75+ re74,   match.out=mout1, nboots=500)
+
+```
+
+####GenMatch for Propensity Scores Matching Results:
+
+Before Matching Minimum p.value: < 2.22e-16 
+Variable Name(s): age education black married nodegree re75 re74  Number(s): 1 2 3 5 6 7 8 
+
+After Matching Minimum p.value: < 2.22e-16 
+Variable Name(s): age education black married nodegree re75 re74  Number(s): 1 2 3 5 6 7 8 
+
+
+We see practically no improvement in the matching balance. The matching didn't achieve better balance than before: not in the lower p-value, and not in the amount of variables with that low p-value. 
+This is because the GenMatch() is meant to get the weights for all the covariates, but if we end up only matching on propensity scores, then it does nothing in practice. 
+
+Although this estimate is indeed relatviely close to the original experimental treatment effect mentioned in section 1: 1794,  it's actually not really closer than previous estimations, for example, in question #3. 
+
+The Genetic Matching Function actually only considers ONE COVARIATE, the propensity scores; therefore, it doens't do its job of optimizing different weights for different parameters; it assigns everyhting onto that one covariate, and just chekcs what's the optimal covariate for it.
+We can see that demonstrated in the resulting weight matrix from the genmatch, which contains only one weight!
+
+$Weight.matrix
+         [,1]
+[1,] 910.1453
+
+
+
+(5.1) Confidence Intervals 
+```{r}
+#estimated treatment effect
+est51 = 1937.9 ; est51
+
+#confidence intervals
+error51 = 1.96*(993.39) ; error51
+confint51.low <- est51 - error51  ;  confint51.up <- est51 + error51  ; 
+confint51.low ; confint51.up
+```
+
+ 434.52 <--(mean:1890.8)--> 3347.08
+Here we see that the treatment effect is positive, with narrower confidence intervals (although not by much than our best results outside of Genetic Matching).
+
+
+
+
+### 5.2 - GenMatch for Multivariate Matching
+
+```{r}
+#The covariates we want to match on
+X52 = cbind(propensities, age, education, black, hispanic, married, nodegree, re74, re75)
+
+#The covariates we want to obtain balance on are the same as X52
+
+#Let's call GenMatch() to find the optimal weight to give each
+#covariate in 'X' so as we have achieved balance on the covariates in #'BalanceMat'
+
+genout2 <- GenMatch(Tr=treat, X=X52, BalanceMatrix = X52, estimand="ATT", M=1, pop.size=150, max.generations=150, replace = TRUE, wait.generations=4,caliper = 0.45)
+
+
+# Now that GenMatch() has found the optimal weights, let's estimate
+# our causal effect of interest using those weights (using Weight.matrix=genout)
+
+mout2 <- Match(Y=Y, Tr=treat, X=X52, estimand="ATT", M=1, replace = TRUE, Weight.matrix=genout2, caliper = 0.45)
+#caliper of 0.45 showed better balance, better results!
+summary(mout2)
+
+#                        
+#Let's determine if balance has actually been obtained on the variables of interest
+#                        
+mb2 <- MatchBalance(treat ~ propensities+age+education+black+ hispanic+ married+ nodegree+ re75+ re74, match.out=mout2, nboots=500)
+
+```
+
+
+(5.2) Confidence Intervals 
+```{r}
+#estimated treatment effect
+est52 = mout2$est ; est52
+
+#confidence intervals
+error52 = 1.96*(743) ; error52
+confint52.low <- est52 - error52  ;  confint52.up <- est52 + error52  ; 
+confint52.low ; confint52.up
+```
+
+
+Before Matching Minimum p.value: < 2.22e-16 
+Variable Name(s): propensities age education black married nodegree re75 re74  Number(s): 1 2 3 4 6 7 8 9 
+
+After Matching Minimum p.value: 0.532 
+Variable Name(s): re74  Number(s): 9 
+
+__________________
+
+Estimate...  1782.4 
+AI SE......  689.6 
+T-stat.....  2.5848 
+p.val......  0.0097449 
+
+Original number of observations..............  16177 
+Original number of treated obs...............  185 
+Matched number of observations...............  131 
+Matched number of observations  (unweighted).  164 
+
+Caliper (SDs)........................................   0.45 0.45 0.45 0.45 0.45 0.45 0.45 0.45 0.45 
+Number of obs dropped by 'exact' or 'caliper'  54 
+
+
+_Finally, Success!_
+Our Multivariate Genetic Matching **indeed** increase our lowest p-values, increased many of the other p values, and reduced the number of "poorly balanced" variables from 7 to 1(!).
+
+This makes sense, since in the propensity scores mathcing we didn't utilize the power of Genetic Matching, but now that we do, we see how it improves our balance much more than in previous attempts: normal Match() function using propensity scores or multivariate matching, or GenMatch() for propensity scores. 
+
+This increases the balance we have, thus makes the results more credible, and our final model for estimation less sensitive. 
+
+After trying various calipers and finding and optimalpoint where less units are dropped but there is still balance, Caliper of 1 seemed well balanced.
+We get the results of: 
+Estimate...  1782.8 
+
+
+Estimate...  1782.8 
+AI SE......  942.79 
+T-stat.....  1.891 
+p.val......  0.058626 
+
+Original number of observations..............  16177 
+Original number of treated obs...............  185 
+Matched number of observations...............  177 
+Matched number of observations  (unweighted).  210 
+
+Caliper (SDs)........................................   1 1 1 1 1 1 1 1 1 
+Number of obs dropped by 'exact' or 'caliper'  8 
+
+
+
+
+## 6: Experimenting with the genmatch and match functions
+(By modifying and adding arguments, learning how they work, and how they impact analysis. Key arguments include ???M???, ???pop size???, ???estimand???, ???exact???, ???caliper???, ???replace???, etc).
+
+####Caliper
+I've experimented with the caliper in Match and GenMatch functions, as talked about more in length in question 4. 
+Starting from Caliper=0.0 (exact matching), I've slowly, iteratviely, increased the caliper to find a balanced point where not too many observations are dropped. What happens is that the caliper (or "maximum difference distance between matched units" allowed), if set to 0 or some very small amount, will find only exactly or very closely matched units, and drop the rest. Therefore, it might change the underlying structure of the treated group taken into consideration - for example, it may only find good matches to Black, 30 year-old people with No Degree. 
+That would decrease our external validity and generalizability, since our results would only apply to that subpopulation.
+In the cases I checked here, it seemed that usually, when I set the caliper to 0.0, the resulting ATT was further away from the experimental results (ATE). As the caliper increased approching the point of dropping only ~10% of units or less, I saw that the Matched results approach the experimental results. 
+This happens since if we limit the compared subpopulations too much, we miss informaiton. We don't want to eliminate much of our precious "treatment" units infromation, and want to consider a wider set of treated sample so we'd have more external validity and generalizability. 
+However, for genetic matching, increasing the caliper incrementally until even over 1.3, the performance of the balance and matching was worse than without sepcifying caliper. 
+When Genetic Matching doesn't use caliper, it uses distance.tolerance, which performed better.
+
+####Replace
+Replace sets wether matching should be done with replacement or not. 
+When I set replace=False, that reduced the quality of the results, resulting in poorer resulting matching - most p-values were not increased by as much.
+This happens since if we remove observations from the pool every time we match them, we decrease the pool size from which we can choose the best match for the next units. Therefore, that same observation which was dropped might have been the best match for next 3 units, but we will have to suffice with increasingly worse matches each time. So usually Replace decreases the quality of matching, and this was visible in this example by not increasing as much many of the P-Values. 
+
+####Pop Size, Generations
+The Population Size and Generations each determine how deep / wide should our genetic search be. Therefore, increasing these improves our final result, but takes considerably more time.
+As I increased the Population size and generations of GenMatch, it took much longer, but overall normally improved the results - seeing with better imrpoved p-values, and sometimes even a smaller AI Standard Error (altough I'm not sure it relates specifically to this).
+
+#### Estimand
+Estimand: we are interested in estimating the ATT - the sample average treatment effect for the treated. 
+Otherwise the estimand could be: "ATE"- the sample average treatment effect, or "ATC" - the sample average treatment effect for the controls.
+
+Using ATE _completely_ changed the results, to a NEGATIVE, but insignificant effect. 
+Estimate...  -509.14 
+AI SE......  495.11 
+The confidence interval crosses 0 to the positive side.
+But this is not the measure of our interest, since we want the treatement effect FOR THE TREATED; therefore we want to take the treated units and match controls onto them, measuring the difference between these pairs. But ATE considers the entire control group, instead of focusing on the treated, therefore we have differences which aren't most representative of the actual effect of our treatment. 
+
+We also didn't improve our balance by much this way. We remained with 3 variables with the unimproved lowest p-value result.
+
+Before Matching Minimum p.value: < 2.22e-16 
+Variable Name(s): propensities age education black married nodegree re75 re74  Number(s): 1 2 3 4 6 7 8 9 
+
+After Matching Minimum p.value: < 2.22e-16 
+Variable Name(s): propensities age education re75 re74  Number(s): 1 2 3 8 9 
+
+#### M
+M=1 is one-to-one matching, which is also the default.
+Increasing this will make matching into many-to-one matching.
+In my experiments, increasing the M DECREASED the quality of covariance balance after Matching. Increasing the M up to 5, decreased the imporvment in p-value after matching up to the point of having no improvement in the lowest p-value. 
+Moreover, the resulting estimate was _significantly far away_ from the experimental results and even from any other method:
+Estimate...  1014.2 
+AI SE......  620.31 .
+

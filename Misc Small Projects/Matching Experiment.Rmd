@@ -1,0 +1,273 @@
+---
+title: "CS112 8 MATCHING PreClass"
+output: html_notebook
+---
+ 
+
+##Initial Data Setup and Exploration
+###In-Sample observed treatment effect for each sample
+
+Calculate the difference in means of the outcome (re78) in both samples.
+Difference in means between Lalonde and NSW samples.
+Are the estimated causal effects the same or similar? (Hint: they should not be the same, because the underlying treatment groups are very different.)
+
+
+```{r}
+setwd("~/Google Drive/Academics (Tomer)/0-2017 Buenos Aires Sem2.2/CS112 DataScience/R_CS112")
+library(foreign)
+library(Matching)
+library(GGally)
+library(ggplot2)
+library(dplyr)
+library(reshape2)
+library(rgenoud)
+library(faraway)
+
+#opening Lalonde NSW Data Sample
+nsw <- read.dta("/Users/tomereldor/Google Drive/Academics (Tomer)/0-2017 Buenos Aires Sem2.2/CS112 DataScience/R_CS112/nsw.dta")
+attach(nsw)
+#head(nsw)
+#dim(nsw)
+
+#opening DW Data Sample
+dw <- read.dta("/Users/tomereldor/Google Drive/Academics (Tomer)/0-2017 Buenos Aires Sem2.2/CS112 DataScience/R_CS112/nsw_dw.dta")
+#head(nsw)
+
+#Calculate the difference in means of the outcome (re78) in both samples
+
+#Lalonde Dateset difference in means
+## divide the data into treated and control
+nsw_treat <- nsw[treat == 1,]
+nsw_control <- nsw[treat == 0,] 
+#verify:
+#nrow(nsw_treat) ; nrow(nsw_control) #check number of units
+
+#calculate difference of means for NSW
+print("NSW means: treat, control")
+mean(nsw_treat$re78) ; mean(nsw_control$re78)
+nsw_diff_means <- mean(nsw_treat$re78) - mean(nsw_control$re78)
+#nsw_diff_means # = $886.3
+
+#DW Dateset difference in means
+## divide the data into treated and control
+dw_treat <- dw[treat == 1,]
+dw_control <- dw[treat == 0,] 
+#na.omit(dw_control)
+#verify
+#nrow(dw_treat) ; nrow(dw_control) #check number of units
+#dw_treat
+#dw_control
+
+#calculate difference of means for dw
+print("DW means: treat, control")
+mean(dw_treat$re78,na.rm=T) ; mean(dw_control$re78,na.rm=T)
+dw_diff_means <- mean(dw_treat$re78) - mean(dw_control$re78,na.rm=T)
+dw_diff_means # = $747.0836
+
+
+##Difference in Means BETWEEN LALONDE to DW
+
+
+#see both differences in means
+print("-----") 
+print("Lalonde diff means")
+nsw_diff_means
+print("DW diff means")
+dw_diff_means
+
+print("-----") 
+print("Difference in Means BETWEEN LALONDE to DW")
+diff_between_samples <- nsw_diff_means - dw_diff_means
+diff_between_samples
+
+```
+
+
+Or: just in two lines, the difference of means
+```{r}
+# Calculate the difference in means of the outcome (re78) in both samples 
+
+TEnsw <- mean(nsw[nsw$treat == 1,]$re78) -  mean(nsw[nsw$treat == 0,]$re78)   
+TEdw <- mean(dw[dw$treat == 1,]$re78) -  mean(dw[dw$treat == 0,]$re78)  
+
+TEnsw
+TEdw
+```
+
+
+
+
+```{r}
+print("Difference in Means BETWEEN LALONDE to DW")
+diff_between_samples
+
+##### t-test
+print("t-test between samples")
+t.test(nsw$re78,dw$re78)
+print("t-test between treated in samples")
+t.test(nsw_treat$re78,dw_treat$re78)
+
+```
+
+
+
+
+##Difference-in-means: pre-treatment covariates
+run balance tests (t-tests) for key covariates. 
+Are the covariates well-balanced?
+
+```{r}
+
+
+#run balance tests (t-tests) for key covariates. 
+
+#nsw
+MatchBalance((treat ~ education + re75 + age + black + hispanic + nodegree),data = nsw, ks=T, print.level = 1, nboots=500)
+
+#dw
+MatchBalance((treat ~ education + re75 + age + black + hispanic + nodegree), data = dw, ks=T, print.level = 1, nboots=500)
+
+
+#run balance tests (t-tests) for key covariates 
+#results show balance
+
+
+#covariates MANUAL
+cov <- c('education', 'black', 'age', 're75', 'nodegree')
+nsw %>%
+  group_by(treat) %>%
+  select(one_of(cov)) %>%
+  summarise_all(funs(mean(., na.rm = T)))  #funs = Create a list of functions calls ; 
+
+
+```
+
+
+
+Now download the PSID and CPS data files and attempt to use Mahalanobis, propensity score, and genetic matching to reconstruct a matched data set in R (e.g., matching nswre74_treated.txt), and you must use the ???Match???, ???GenMatch???, and ???MatchBalance??? functions???see the relevant help files. What are the properties of your matched data set? Are you able to recover the benchmark experimental estimate obtained in the randomized experiment?
+
+
+##Mahalanobis Distance
+
+```{r}
+#setwd("~/Google Drive/Academics (Tomer)/0-2017 Buenos Aires Sem2.2/CS112 DataScience/R_CS112")
+cps_controls <- read.dta("cps_controls.dta")
+psid_controls <-  read.dta("psid_controls.dta")
+nsw.treated <- read.table("nsw_treated.txt")
+
+names(cps_controls)
+
+cps_controls=cps_controls[2:10]
+cov(cps_controls)
+mahalanobis(x, colMeans(x), cov(x))
+
+
+
+```
+
+
+
+#Propensity Scores
+
+```{r}
+
+nsw.p <- nsw # copy lalonde for ps estimation
+
+# generate propensity scores for all of the data in Lalonde 
+ps.model <- glm(treat ~ age + education + black + nodegree + hispanic 
+re75, data = nsw.p, family=binomial(link="logit"), na.action=na.pass)
+ 
+summary(ps.model)
+ 
+# add pscores to study data
+nsw.p$pscore <- predict(ps.model, newdata = nsw.p, type = "response")
+ 
+hist(nsw.p$pscore) # distribution of ps
+summary(nsw.p$pscore)
+dim(nsw.p)
+ 
+# restrict data to ps range .10 <= ps <= .90
+
+nsw.p2 <- nsw.p[nsw.p$pscore >= .10 & nsw.p$pscore <=.90,]
+ 
+summary(nsw.p2$pscore)
+
+
+
+```
+
+
+##Genetic Matching
+
+```{r}
+# Append  the DW treated data to psid and cps -- why DW and not NSW? DW has re74 data, which psid and cps have
+
+psidcombined <- psid
+psidcombined <- rbind(dw[dw$treat == 1,],psidcombined)
+psidcombined$treat <- psidcombined$treat == 1 # convert ones and zeroes to TRUE and FALSE (necessary for functions)
+
+# Repeat for cps data
+
+cpscombined <- cps
+cpscombined <- rbind(dw[dw$treat == 1,],cpscombined)
+cpscombined$treat <- cpscombined$treat == 1
+
+```
+
+
+```{r}
+# Run genmatch to find weights that maximize balance betwen treatment and control groupsgenoutpsid <- GenMatch(Tr = 
+
+genoutpsid <- GenMatch(Tr = psidcombined$treat, X = psidcombined[,3:10], BalanceMatrix = psidcombined[,3:10])
+genoutcps <- GenMatch(Tr = cpscombined$treat, X = cpscombined[,3:10], BalanceMatrix = cpscombined[,3:10])
+```
+
+
+```{r}
+# Now let's match -- create control groups from the PSID and CPS data WITH the genmatch output
+
+matchedpsid.gm <- Match(Y = psidcombined$re78, Tr = psidcombined$treat, X = psidcombined[,3:10], M = 1, Weight.matrix = genoutpsid, BiasAdj=FALSE,sample = TRUE)
+
+matchedcps.gm <- Match(Y = cpscombined$re78, Tr = cpscombined$treat, X = cpscombined[,3:10], M = 1, Weight.matrix = genoutcps,BiasAdj=FALSE,sample = TRUE)
+
+matchedpsid.gm$est
+matchedcps.gm$est
+
+MatchBalance(psidcombined$treat~psidcombined$re78, data=psidcombined, match.out = matchedpsid.gm,nboots=500)
+MatchBalance(cpscombined$treat~cpscombined$re78, data=cpscombined, match.out = matchedcps.gm,nboots=500)
+```
+
+```{r}
+# Let's see how the match function performs in the absence of genetic matching
+
+matchedpsid <- Match(Y = psidcombined$re78, Tr = psidcombined$treat, X = psidcombined[,3:10], M = 1, BiasAdj=FALSE,sample = TRUE)
+
+matchedcps <- Match(Y = cpscombined$re78, Tr = cpscombined$treat, X = cpscombined[,3:10], M = 1,BiasAdj=FALSE,sample = TRUE)
+
+matchedpsid$est
+matchedcps$est
+
+MatchBalance(psidcombined$treat~psidcombined$re78, data=psidcombined, match.out = matchedpsid,nboots=500)
+MatchBalance(cpscombined$treat~cpscombined$re78, data=cpscombined, match.out = matchedcps,nboots=500)
+```
+
+#Propensity Scores Matching
+
+```{r}
+# Let's carry out propensity score matching
+
+glmpsid <- glm(psidcombined$treat~psidcombined$age + psidcombined$black + psidcombined$hisp + psidcombined$nodegr + psidcombined$re74 + psidcombined$re75 + psidcombined$re78, family=binomial, data=psidcombined)
+
+glmcps <- glm(cpscombined$treat~cpscombined$age + cpscombined$black + cpscombined$hisp + cpscombined$nodegr + cpscombined$re74 + cpscombined$re75 + cpscombined$re78, family=binomial, data=cpscombined)
+
+matchedglmpsid <- Match(Y = psidcombined$re78, Tr = psidcombined$treat, X = glmpsid$fitted, M = 1,BiasAdj=FALSE,sample = TRUE)
+matchedglmcps <- Match(Y = cpscombined$re78, Tr = cpscombined$treat, X = glmcps$fitted, M = 1,BiasAdj=FALSE,sample = TRUE)
+
+matchedglmpsid$est
+matchedglmcps$est
+
+MatchBalance(psidcombined$treat~psidcombined$re78, data=psidcombined, match.out = matchedglmpsid,nboots=500)
+MatchBalance(cpscombined$treat~cpscombined$re78, data=cpscombined, match.out = matchedglmcps,nboots=500)
+
+```
+

@@ -1,0 +1,545 @@
+---
+title: "Lalonde 3 Ways"
+output:
+  word_document: default
+  pdf_document: default
+  html_notebook: default
+---
+
+Environemnt setup and data Prep
+
+```{r}
+###### DATA PREP ######
+#setting the workspace, libraries, data
+#setwd("~/Google Drive/Academics (Tomer)/0-2017 Buenos Aires Sem2.2/CS112 DataScience/R_CS112") #(Yep. I know that's long)
+library(Matching)
+library(randomForest)
+data("lalonde")
+#head(lalonde)
+#View(lalonde)
+#summary(lalonde)
+attach(lalonde)
+```
+
+
+# 1. MULTIVARIATE REGRESSION 
+
+Creating a Multivariate regression of real earnings 
+
+
+```{r}
+#multivariate regression of real earnings 
+lm2 <- lm(re78 ~ treat + educ + re75 + age + black + hisp + nodegr + u74 + u75 + married, data=lalonde) 
+summary(lm2)
+coefficients(lm2)
+```
+
+CONFIDENCE INTERVALS for the variables of the multiple regression
+```{r}
+confint(lm2,parm="treat",level = 0.95)
+
+```
+
+## (1.d) Are estimated treatment effects higher for individuals with (or without) a high school degree?
+Let's check.
+I will split the dataset by degree and nondegree
+```{r}
+#splitting the dataset by degree and nondegree
+data_degree <- subset(lalonde, nodegr == 0) 
+data_nodegree <- subset(lalonde, nodegr == 1) 
+
+#verifying and viewing the sub_dataframes
+#head(data_nodegree)
+#head(data_degree)
+#dim(data_nodegree)
+#dim(data_degree)
+```
+
+
+fitting regressions for degree and no degree
+```{r}
+lm_nodgr <- lm(re78 ~ treat + educ + re75 + age + black + hisp + nodegr + u74 + u75 + married, data = data_nodegree) 
+lm_dgr <- lm(re78 ~ treat + educ + re75 + age + black + hisp + nodegr + u74 + u75 + married, data = data_degree) 
+
+#view regression results
+summary(lm_nodgr)
+summary(lm_dgr)
+#view specifically the coefficients
+coefficients(lm_nodgr)
+coefficients(lm_dgr)
+#view confidence intervals of coefficients
+confint(lm_nodgr)
+confint(lm_dgr)
+```
+
+# 2. RANDOM FOREST REGRESSION 
+
+### 2.a - fit random forest model, fitting 78 onto the same predictors as before
+```{r}
+forest <- randomForest(re78 ~ treat + educ + re75 + age + black + hisp + nodegr + u74 + u75 + married, data = lalonde, importance=TRUE, ntree=500)
+summary(forest)
+print(forest)
+#plot(forest)
+```
+
+
+####  2.a - predictor importance table
+We see by the variable importance table and plot how "important" was each variable.
+Meaning, if we took out this variable, by how much percent would are Mean Squared Error increase?
+We see that unemployment in 74 ,black, unemployment in  75 and real earnings 75 were more instrumental for our Forest's accuracy.
+interestingly, the treatment variable is only after these and years of education 6th in importance, and has relatively low inc-node purity.
+```{r}
+importance(forest)
+varImpPlot(forest)
+```
+
+
+##   2.b - predict treatment effect for the treatment units
+```{r}
+#create dataset of only treated units, without re78
+data_treated <- lalonde[treat == 1,]
+data_treated_cf <- lalonde[treat == 1,] 
+
+   #dim(data_treated)
+   #head(data_treated_cf)
+
+```
+
+2.b - We'll predict counterfactual estimated for what would be the real earnings for the treated units if they weren't treated?
+Then we'll calculate the treatment effect based on the test statistic of the mean difference between each unit's potential outcomes, if treated (as in reality) or if it weren't treated (estimated).
+
+```{r}
+#change all "treated = 1" to 0 (control)
+data_treated_cf$treat <- 0
+#head(data_treated_cf)
+
+#use predict function basing on the forest model fitted upon the entire dataset
+predict(forest, data_treated_cf)
+rf_predicted_cf <- predict(forest, data_treated_cf)
+
+#estimated treatment effect for only the treated units, based on potential counterfactual outcomes for each unit.
+#("What would be the difference in earnings 1978 for the treated units between reality where they've been treated, to if they weren't treated?")
+mean(data_treated_cf$re78 - rf_predicted_cf)
+```
+
+We see the treatment effect for the all treated units is $1273.414. Meaning, the treated units are estimated to have gained $1273.414 on average by the program.
+
+
+
+##  2.C - Degree / vs NoDegree Random Forest 
+Now we want to test the same: the difference in potential outcomes for the treated people, but seperately for people who have a degree and for people without a degree.
+```{r}
+# create dataset of only treated units, without re78
+treated_yesdegree <- subset(data_treated, nodegr == 0) 
+treated_nodegree <- subset(data_treated, nodegr == 1) 
+
+#view and verify our subdatasets look right, if we want:
+#head(data_degree)
+#head(data_nodegree)
+#dim(data_degree)
+#dim(data_nodegree)
+
+```
+
+
+
+### 2.C - Predict counterfactuals for each subgroup
+First, we will create new datasets that will be the same dataset of the treated units, but would "fake" the same units to be in the control group, by changing "treat" from "1" to "0".
+
+```{r}
+#create new datasets that will contain counterfactuals
+treated_yesdg_cf <- subset(treated_yesdegree, nodegr == 0) 
+treated_nodg_cf <- subset(data_treated, nodegr == 1) 
+
+#change all "treated = 1" to 0 (control)
+treated_yesdg_cf$treat <- 0
+treated_nodg_cf$treat <- 0
+```
+
+
+Now we will predict the earnings in 1978 for each subgroup.
+```{r}
+#use predict function, basing on the forest model fitted upon the entire dataset, what would be the results of 
+predicted_re78_yesdg_treated_cf <- predict(forest,data=treated_yesdg_cf)
+predicted_re78_nodg_treated_cf <- predict(forest, data=treated_nodg_cf)
+
+```
+
+
+
+### 2.C1 - WITH DEGREE COMPARISON.
+Comparing the potential outcomes for the people WITH DEGREE who were treated (in the program). This means we estimate how much would they have gained from wether they haven't been given the treatment.
+```{r}
+#treatment effect of treated people with degree
+
+#viewing each mean
+print("average earnings in 1978 for treated with degree")
+mean(treated_yesdegree$re78)
+print("predicted mean earnings in 1978 for treated people with degree IF THEY HADN'T BEEN TREATED")
+mean(predicted_re78_yesdg_treated_cf)
+
+#treatment effect (only treated)
+print("treatment effect for treated people with degree")
+mean(treated_yesdegree$re78) - mean(predicted_re78_yesdg_treated_cf)
+
+
+#plot WITH DEGREE counterfactual comparison
+plot(density(treated_yesdegree$re78), xlim = c(-11000,46000),ylim = c(0,0.00025), col="green", main = "Density of earnings for people WITH a degree", ylab = "Density", xlab = "Earnings 78")
+lines(density(predicted_re78_yesdg_treated_cf),col="red")
+legend(x=42000, y=0.00025, xjust=1, col = c("green","red"), legend = c("actual earnings of treated", "predicted earnings if not treated"),  bty="n", pch= c(16, 16) )
+```
+
+So, the treatment effect for treated people WITH DEGREE is: $2647.82
+
+
+### 2.C2 - WITH NO DEGREE COMPARISON
+```{r}
+#treatment effect of treated people without degree
+print("average earnings in 1978 for treated with NO degree")
+mean(treated_nodegree$re78)
+
+print("predicted mean earnings in 1978 for treated people with NO degree IF THEY HADN'T BEEN TREATED")
+mean(predicted_re78_nodg_treated_cf)
+
+print("treatment effect for treated people with NO degree")
+mean(treated_nodegree$re78) - mean(predicted_re78_nodg_treated_cf)
+
+#plot WITHOUT DEGREE counterfactual comparison
+plot(density(treated_nodegree$re78), xlim = c(-11000,46000),ylim = c(0,0.00025), col="blue", main = "Density of earnings for people with NO degree", ylab = "Density", xlab = "Earnings 78")
+lines(density(predicted_re78_nodg_treated_cf),col="orange")
+legend(x=40000, y=0.00020, xjust=1, col = c("blue","orange"), legend = c("true earnings for treated", "predicted earnings if not treated"),  bty="n", pch= c(16, 16) )
+
+```
+
+So, the treatment effect for treated people WITH NO DEGREE is: $250.76
+This is MUCH lower, almost miniscule, compared to the treatment effect for treated people WITH DEGREE, which was: $2647.82.
+Meaning, people with degree gained from the treatment, on average, **$2397.06** more than people without degree gained from the treatment. ($2647.82 vs $250.76).
+
+
+# 3. Implement a Fisher Exact Test (FET) using the sharp null hypothesis of no treatment effect for any unit. 
+
+
+ 
+1. Defining a test statistic for estimating the treatment effect and evaluating the null hypothesis:
+**  We define the test statistic as the mean of earnings for all units  minus mean of all units untreated (y(1) ??? y(0)) **
+
+Calculating the actual observed treatment effect between the original groups:
+```{r}
+
+
+original_observed_meandiff <- (mean(lalonde[treat == 1,]$re78) - mean(lalonde[treat == 0,]$re78))
+original_observed_meandiff
+
+```
+
+The original observed treatment effect between the original groups is: $1794.343.
+
+
+2. Defining a sharp null hypothesis (hypothesis regarding the size of the treatment effect on each unit):
+** We will define the null hypothesis as "treatment effect = 0"" of absolutely no effect of treatment: (Yi(0) = Yi(1) for all units). **
+
+
+
+
+** To implement Fisher's exact test, we will take random assignments to treatemnet, calcualte the observed average treatement effect for each random assignment, and store these results in a storage list. **
+
+
+Now we will make many random assignments of the units to control and treatment groups. 
+
+  For each random assignment:
+      a. Calculate treatment effect: Average all Y(1)s -minus all Y(0) results. 
+      (this would depend on the initial values; if I happen to assign to the treatment all units with smaller values,       and the larger values to the control, I would get a negative average treatment effect even if for each unit          individually is increasing with treatment.)
+      
+      b. Save this treatment effect to a list of treatment effects (1 for each assignment).
+
+
+Here we create the assignment function, which randomizes into treatment and control groups, and returns the observed average treatment effect for that assignment. 
+
+```{r}
+
+
+# Assignment function: randomizes groups and returns the observed average treatment effect 
+
+rand_assign_mean <- function() {
+  #randomizing units to be treated: half of the people
+  randtreat <- sample(nrow(lalonde),nrow(lalonde)/2,replace = FALSE)
+  
+  #taking the rest to be control
+  randcontrol <- nrow(lalonde)-randtreat
+  
+  #assigning vectors of outcomes
+  randcontrol_outcomes <- lalonde[randcontrol,]$re78
+  randtreatmnet_outcomes <- lalonde[randtreat,]$re78
+  
+  #calculate the observed mean treatment effect
+  return(mean(randtreatmnet_outcomes) - mean(randcontrol_outcomes))
+}
+
+
+```
+
+
+Now we will iterate through many of these random assignments:
+
+```{r}
+### *this code snippet is assited by Ben Imadali's code.
+
+#initiating a storage list vector (empty for now, later will store our results)
+storage <- NULL
+
+# Iterating the Assignment function   
+iter.RI <- function(iterations = 500) {
+  for (i in 1:iterations) 
+  {storage[i] <- rand_assign_mean()
+  }
+  return(storage)
+}
+
+results <- iter.RI()
+head(results)
+```
+
+
+### Exploring the results
+Now we will observe the distribution of our resulting treatment effects. Since each random assignemnt to groups would yield a different treatment effect, even if the treatment has no actual effect (true treatment effect is = 0), we would have a range of these observed effects given the treatment effect is 0. We want to understand where does our REAL observed treatment effect (from the original experiment) stands in relation to these results, then we could understand HOW LIKELY was it to observe our treatment effect, given the null hypothesis is true.
+
+first, let's see our confidence intervals for the results:
+```{r}
+quantile(results, prob = c(0.025, 0.975))
+
+```
+
+we see our confidence interval of 95% (between the 2.5% and 97.5%) is: {-805.3602  to 915.4775 }.
+
+Let's explore the data a bit more, and plot the distribution of potential treatment effects if the null hypothesis was true.
+The actual observed treatment effect between the original groups was, as we saw before: 1794.343
+
+```{r}
+
+#plot the distribution of potential treatment effects if the null hypothesis was true
+plot(density(results), xlim = c(-1800,1800), main = "Density distribution of treatment effects if null=true", ylab = "Density", xlab = "treatment effect")
+
+
+
+#Where does our original treatment effect stand upon on that distribution? the red line:
+abline(v = 1794.343, lwd = 4, col = "red") 
+
+max(results)
+
+#our confidence interval plotted upon this distriubtion
+abline(v = -805.3602, lwd = 2, col = "orange") 
+abline(v =  915.4775, lwd = 2, col = "orange") 
+
+
+
+
+```
+
+We can actually see that the maximum outcome if the null hypothesis is true from our simulation was $1586. Our treatment effect is 1794, which is larger than this maximum value!
+We can also see that visually in the plot.
+From this method too, we see that our observed treatment effect is indeed very unlikely to happen if our null hypothesis is true.
+
+
+## 3.B - Fisher exact test seperately for people with degree and without.
+
+Observed mean
+### 3.B.1 - FET for people WITH DEGREE
+
+```{r}
+
+#data_degree
+
+#treatment
+degree_treatment_re <- subset(data_degree, treat == 1, select=re78) 
+#removing NA values
+degree_treatment_re <- degree_treatment_re[!is.na(degree_treatment_re)]
+#control
+degree_control_re <- subset(data_degree, treat == 0, select=re78) 
+#removing NA values
+degree_control_re <- degree_control_re[!is.na(degree_control_re)]
+
+degree_observed_meandiff <- mean(degree_treatment_re) - mean(degree_control_re)
+degree_observed_meandiff
+
+
+```
+
+Observed treatment effect for people with degree was $3192.
+
+
+Now we'll apply the FET simulation of random assignments to groups and where our observed effect stand in relation to the distrubtion for those WITH DEGREE.
+
+```{r}
+# Assignment function: randomizes groups and returns the observed average treatment effect 
+
+#data_degree
+
+
+rand_assign_mean_degree <- function() {
+  #randomizing units to be treated: half of the people
+  randtreat <- sample(nrow(data_degree),nrow(data_degree)/2,replace = FALSE)
+  
+  #taking the rest to be control
+  randcontrol <- nrow(data_degree)-randtreat
+  
+  #assigning vectors of outcomes
+  randcontrol_outcomes <- data_degree[randcontrol,]$re78
+  randcontrol_outcomes <- randcontrol_outcomes[!is.na(randcontrol_outcomes)]
+  randtreatmnet_outcomes <- data_degree[randtreat,]$re78
+  randtreatmnet_outcomes <- randtreatmnet_outcomes[!is.na(randtreatmnet_outcomes)]
+
+  #calculate the observed mean treatment effect
+  return ( mean(randtreatmnet_outcomes) - mean(randcontrol_outcomes) )
+} 
+
+
+
+#initiating a storage list vector (empty for now, later will store our results)
+storage_degree <- NULL
+
+rand_assign_mean_degree()
+
+# Iterating the Assignment function   
+iter.RI <- function(iterations = 1000) {
+  for (i in 1:iterations) 
+  {storage_degree[i] <- rand_assign_mean_degree()
+  }
+  return(storage_degree)
+}
+
+results_degree <- iter.RI()
+head(results_degree)
+
+#confidence interval for results
+quantile(results_degree, prob = c(0.025, 0.975))
+# confidence interval: -2349.641  2453.530 
+
+#plot the distribution of potential treatment effects if the null hypothesis was true
+plot(density(results_degree), col="purple", main = "DEGREE: Density distribution of treatment effects for people with DEGREE if null=true", ylab = "Density", xlab = "treatment effect")
+
+#Where does our original treatment effect stand upon on that distribution? the red line:
+abline(v = degree_observed_meandiff, lwd = 3, col = "red") 
+
+max(results)
+
+#our confidence interval plotted upon this distriubtion
+abline(v = quantile(results_degree, prob = c(0.025, 0.975)), lwd = 2, col = "green") 
+
+#degree_observed_meandiff
+#quantile(results_degree, prob = c(0.025, 0.975))[2]
+deg_diff_from_conf <- degree_observed_meandiff - quantile(results_degree, prob = c(0.025, 0.975))[2]
+deg_diff_from_conf
+```
+
+For people with a degree, the results show that the observed outcomes for people with degree are significnatly higher than the hypothetical resutls if the null hypothesis was true. The difference between our true observed treatment effect ($3192) and the upper bound of the confidence interval of the null results (2248.331) is significant, at almost another 1000 dollars: 943.69.
+
+### 3.B.3 - FET for people with NO DEGREE
+
+
+
+```{r}
+
+#data_nodegree
+
+#treatment
+nodeg_treatment_re <- subset(data_nodegree, treat == 1, select=re78) 
+#removing NA values
+nodeg_treatment_re <- nodeg_treatment_re[!is.na(nodeg_treatment_re)]
+#control
+nodeg_control_re <- subset(data_nodegree, treat == 0, select=re78) 
+#removing NA values
+nodeg_control_re <- nodeg_control_re[!is.na(nodeg_control_re)]
+
+nodeg_observed_meandiff <- mean(nodeg_treatment_re) - mean(nodeg_control_re)
+nodeg_observed_meandiff
+
+
+```
+
+**The observed treatment effect for people with NO degree was: $1154.048.**
+
+
+
+```{r}
+# Assignment function: randomizes groups and returns the observed average treatment effect 
+
+
+rand_assign_mean_nodeg <- function() {
+  #randomizing units to be treated: half of the people
+  randtreat <- sample(nrow(data_nodegree),nrow(data_nodegree)/2,replace = FALSE)
+  
+  #taking the rest to be control
+  randcontrol <- nrow(data_nodegree)-randtreat
+  
+  #assigning vectors of outcomes
+  randcontrol_outcomes <- data_nodegree[randcontrol,]$re78
+  randcontrol_outcomes <- randcontrol_outcomes[!is.na(randcontrol_outcomes)]
+  randtreatmnet_outcomes <- data_nodegree[randtreat,]$re78
+  randtreatmnet_outcomes <- randtreatmnet_outcomes[!is.na(randtreatmnet_outcomes)]
+
+  #calculate the observed mean treatment effect
+  return ( mean(randtreatmnet_outcomes) - mean(randcontrol_outcomes) )
+} 
+
+
+
+#initiating a storage list vector (empty for now, later will store our results)
+storage_nodeg <- NULL
+
+rand_assign_mean_nodeg()
+
+# Iterating the Assignment function   
+iter.RI <- function(iterations = 1000) {
+  for (i in 1:iterations) 
+  {storage_nodeg[i] <- rand_assign_mean_nodeg()
+  }
+  return(storage_nodeg)
+}
+
+results_nodeg <- iter.RI()
+head(results_nodeg)
+
+#confidence interval for results
+quantile(results_nodeg, prob = c(0.025, 0.975))
+# confidence interval: -2349.641  2453.530 
+
+#plot the distribution of potential treatment effects if the null hypothesis was true
+plot(density(results_nodeg), col="brown", main = "NO DEGREE: Density distribution of treatment effects for people with NO DEGREE if null=true", ylab = "Density", xlab = "treatment effect")
+
+#Where does our original treatment effect stand upon on that distribution? the red line:
+abline(v = nodeg_observed_meandiff, lwd = 3, col = "red") 
+
+#max(results)
+
+#our confidence interval plotted upon this distriubtion
+abline(v = quantile(results_nodeg, prob = c(0.025, 0.975)), lwd = 2, col = "pink") 
+
+nodeg_observed_meandiff
+quantile(results_nodeg, prob = c(0.025, 0.975))[2]
+nodeg_observed_meandiff - quantile(results_nodeg, prob = c(0.025, 0.975))[2]
+```
+
+From this we can see that the treatment effect for people without degree not only was much lower, but also closer to the upper limit of the confidence interval of the hypothetical null hypothesis results. Therefore, the treatment effect for people with no degree is both lower and less significant.
+For people with no degree, the difference between the observed outcomes (1154.048) to the upper bound of null hypothesis (889.27) results is 264.76. The proportion of this difference is 23% (264.76/1154.048).
+Whereas the difference for people with degree was more significant: 943.69; and the observed outcomes themselves were larger: 3192 average observed treatment effect. This is a proportion of about 30% (943.69/3192).
+
+```{r}
+943.69/3192
+264.76/1154.048
+```
+
+
+
+# Conclusion
+All our methods suggest that the program is significant. Assuming that the costs for running it are reasonable for making an increase of ~$1500 - we should run the program.
+The effects were MUCH more useful for people WITH degree than for people WITHOUT degree.
+However, the effects for people without degree were still positive, even if small.
+Therefore, I would reccomend definitely running the program for participants with degree.
+If the program still has funds left after covering all people with a degree, they could start accepting people with no degree. However, they should probably try to adapt the program to this segment, since it appearantly is not the most effective program for them. Alternatively, if they have a better working program with a more significant positive impact than this impact on peoplw without a degree, they can simply take these extra funds and reallocate them for that other program.
+
+
+
+
+
+
+
