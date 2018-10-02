@@ -5,6 +5,6 @@ This folder consists of project made for:
 3. Modeling and Simulation for Decision Making - Course CS166 (Python Models and Simulations, in iPython notebooks)
 
 I'd recommend looking at:
-- CS166 Final (it was too heavy so you'd need to download it)
+- CS166 Final (it was too heavy so you'd need to download it). Same for "Social Dynamics and Personal Parameters".
 - CS112 Final: Does Obesity Increase Weight?
 - NYC Taxi Report
