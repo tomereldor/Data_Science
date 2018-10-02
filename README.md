@@ -6,5 +6,5 @@ This folder consists of project made for:
 
 I'd recommend looking at:
 - CS166 Final (it was too heavy so you'd need to download it). Same for "Social Dynamics and Personal Parameters".
-- CS112 Final: Does Obesity Increase Weight?
-- NYC Taxi Report
+- Does_Obesity_Impact_Wages__Overweight_and_Overburdened/Does Obesity Really Reduce Wage - Final.pdf
+- NYC Taxi Analysis (PDF Report)
