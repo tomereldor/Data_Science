@@ -7,6 +7,6 @@ This folder consists of project made for:
 5. Computational Urbanism tutorial
 
 I'd recommend looking at:
-- [Does Obesity Really Reduce Wage?] (https://github.com/tomereldor/Data_Science/blob/master/Does_Obesity_Impact_Wages__Overweight_and_Overburdened/Does%20Obesity%20Really%20Reduce%20Wage%20-%20Final.pdf)
+- [Does Obesity Really Reduce Wage?](https://github.com/tomereldor/Data_Science/blob/master/Does_Obesity_Impact_Wages__Overweight_and_Overburdened/Does%20Obesity%20Really%20Reduce%20Wage%20-%20Final.pdf)
 - NYC Taxi Analysis (PDF Report)
 – Check out other related repositories, like Simulation Modeling, Deep Learning
